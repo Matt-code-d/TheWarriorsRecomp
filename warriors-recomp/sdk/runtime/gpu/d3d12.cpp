@@ -2904,6 +2904,7 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     PixelKey pk = MakePixelKey(s, stages.info);
     pk.quad = sh.quad;
     // Soft cookie quads / projected lights: UV radial falloff softens the hard ground plate.
+    // DO NOT force pk.quad=0 / sh.quad=false here — that + soft_cookie alpha broke Rembrandt into a lit box.
     if (SoftLightVolume(s, a) || SoftLightProjected(s)) pk.soft_cookie = 1;
     sh.pkey = Hash(&pk, sizeof(pk));
     EnsurePixelShader(pk, sh);

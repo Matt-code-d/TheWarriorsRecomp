@@ -2,6 +2,7 @@
 #include <cstring>
 
 #include "kernel/memory.h"
+#include "xdk/dsound_host.h"
 #include "xdk/hle.h"
 
 using namespace kernel;
@@ -12,11 +13,6 @@ using namespace kernel;
 namespace {
 
 void Done(X86Context& ctx, int args = 2) { Return(ctx, 0, args); }
-
-void ZeroVoiceProps(uint32_t props) {
-    if (!props) return;
-    std::memset(HostPtr(props), 0, 92);
-}
 
 template <int Args>
 void Ignore(X86Context& ctx) {
@@ -38,40 +34,46 @@ X86_FUNC(sub_003AA08A) {
 // GetVoiceProperties(DSVOICEPROPS*) — XACT 0x3D347C when moving a voice between outputs
 X86_FUNC(sub_003A97CE) {
     (void)base;
-    ZeroVoiceProps(R32(ctx.esp + 8));
+    xdk::DirectSoundGetVoiceProperties(R32(ctx.esp + 4), R32(ctx.esp + 8));
     Done(ctx);
 }
 X86_FUNC(sub_003AA0D8) {
     (void)base;
-    ZeroVoiceProps(R32(ctx.esp + 8));
+    xdk::DirectSoundGetVoiceProperties(R32(ctx.esp + 4), R32(ctx.esp + 8));
     Done(ctx);
 }
 
 // SetPitch
 X86_FUNC(sub_003A95FA) {
     (void)base;
+    xdk::DirectSoundSetPitch(R32(ctx.esp + 4), int32_t(R32(ctx.esp + 8)));
     Done(ctx);
 }
 X86_FUNC(sub_003AA085) {
     (void)base;
+    xdk::DirectSoundSetPitch(R32(ctx.esp + 4), int32_t(R32(ctx.esp + 8)));
     Done(ctx);
 }
 
-// Set3DVoiceData / Use3DVoiceData — guest would touch host object +0xB / +0xB8
+// Set3DVoiceData / Use3DVoiceData — apply on the host voice; never run guest object writes
 X86_FUNC(sub_003A981C) {
     (void)base;
+    xdk::DirectSoundSet3DVoiceData(R32(ctx.esp + 4), R32(ctx.esp + 8));
     Done(ctx);
 }
 X86_FUNC(sub_003AA0DD) {
     (void)base;
+    xdk::DirectSoundSet3DVoiceData(R32(ctx.esp + 4), R32(ctx.esp + 8));
     Done(ctx);
 }
 X86_FUNC(sub_003A986A) {
     (void)base;
+    xdk::DirectSoundUse3DVoiceData(R32(ctx.esp + 4), R32(ctx.esp + 8) != 0);
     Done(ctx);
 }
 X86_FUNC(sub_003AA0E2) {
     (void)base;
+    xdk::DirectSoundUse3DVoiceData(R32(ctx.esp + 4), R32(ctx.esp + 8) != 0);
     Done(ctx);
 }
 
@@ -131,14 +133,17 @@ X86_FUNC(sub_003ABEA9) {
 // Stream SetOutputBuffer-style thunks XACT uses for submix routing
 X86_FUNC(sub_003ABF36) {
     (void)base;
+    xdk::DirectSoundSetOutputBuffer(R32(ctx.esp + 4), R32(ctx.esp + 8));
     Done(ctx);
 }
 X86_FUNC(sub_003ABF40) {
     (void)base;
+    xdk::DirectSoundSetOutputBuffer(R32(ctx.esp + 4), R32(ctx.esp + 8));
     Done(ctx);
 }
 X86_FUNC(sub_003ABF45) {
     (void)base;
+    xdk::DirectSoundSetOutputBuffer(R32(ctx.esp + 4), R32(ctx.esp + 8));
     Done(ctx);
 }
 

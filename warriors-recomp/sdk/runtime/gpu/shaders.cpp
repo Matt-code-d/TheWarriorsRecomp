@@ -946,6 +946,7 @@ std::string PixelHlsl(const PixelKey& k) {
     if (k.alphatest) body += "alphatest(outc.a);\n";
     // Soft light cookie quads: title falloff is lost (wrap/aniso/opaque cookie) → hard ground square.
     // Radial mask in UV space restores a soft circle without touching other draws.
+    // DO NOT multiply outc.a by falloff — that re-broke Rembrandt/Coney Island into a hard lit box.
     if (k.soft_cookie) {
         body += "{\n";
         body += "    float2 _sc = tc0.w != 0 && abs(tc0.w) > 1e-5 ? tc0.xy / tc0.w : tc0.xy;\n";

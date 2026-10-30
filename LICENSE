@@ -1,0 +1,58 @@
+MIT License
+
+Copyright (c) 2026 Matt-code-d
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------------
+SCOPE (not part of the MIT grant above — clarification only)
+
+This MIT license covers only the original work in this repository authored for
+TheWarriorsRecomp (for example: project glue, EUR host patches, launcher,
+configs, documentation, and other files committed here that are not third-party).
+
+It does NOT cover, and does NOT grant any rights to:
+
+  • The Warriors (or any other commercial game) — including disc images,
+    XBE binaries, WAD/audio/video/Bink assets, or other game data.
+    Those remain property of their respective rights holders (Rockstar Games,
+    Rockstar Leeds, Take-Two, and others). Bring your own legally owned dump.
+
+  • Third-party libraries, SDKs, and tools used by or alongside this project
+    (including but not limited to XboxXBERecomp / TGP482 runtime components,
+    extract-xiso, LLVM/Clang, SDL, Dear ImGui, and their dependencies).
+    Those keep their own licenses; see their upstream projects and any
+    bundled license notices (e.g. THIRD_PARTY.txt beside a release build).
+
+NO GAME DATA; NO REUPLOADS
+
+This repository is intentionally designed so that it does not include, and
+does not redistribute, any The Warriors (or other) game data — no ISOs, XBEs,
+extracted disc folders, audio, video, or similar assets. Users must supply their
+own legally obtained copy locally (“bring your own dump”).
+
+The copyright holder and contributors do not authorize, host, mirror, or
+endorse any upload or reupload of game files to the internet or any other
+distribution channel. Any such redistribution by third parties is outside
+the scope of this project and is done solely at those parties’ own risk
+and responsibility.
+
+To the maximum extent permitted by applicable law, the copyright holder and
+contributors disclaim any liability for third-party redistribution or other
+misuse of game content in connection with this Software.

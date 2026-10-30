@@ -1,0 +1,71 @@
+# Game data — never commit dumps
+**/*.iso
+**/default.xbe
+**/assets/
+!warriors-recomp/assets/.gitkeep
+
+# Build trees
+**/out/
+**/bin/
+**/obj/
+**/compiler/work/
+**/*.dll
+**/*.exe
+**/*.pdb
+**/*.lib
+**/*.exp
+!**/.gitkeep
+
+# Keep launcher publish scripts able to rebuild; ignore local port game host binaries
+port/*.exe
+port/*.dll
+port/*.pdb
+port/assets/
+port/compiler/
+port/hdd/
+port/logs/
+port/Warriors.dll
+port/settings.toml
+port/language.cfg
+
+# IDE / agent — local only
+.cursor/
+.vscode/
+*.user
+.vs/
+
+# Logs & dumps
+**/logs/
+**/CrashDumps/
+**/hdd/
+*.log
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Local tools caches / scratch (not part of the public tree)
+tools/saw2_*
+tools/antriksh*
+tools/screen_*.png
+tools/hello.txt
+tools/rebuild_host.log
+tools/*.zip
+tools/Warriors.zip
+tools/xbe_peek/
+tools/build_*.log
+tools/iso_*.*
+tools/*.png
+
+# Local font kits / scratch archives (not redistributed)
+helvetica-neue-condensed-bold.zip
+mersey_cowboy.zip
+*.iso
+
+# Nested clone metadata — EUR patches live in-tree under warriors-recomp/sdk/
+warriors-recomp/sdk/.git/
+
+# Generated / fetched deps
+warriors-recomp/generated/
+warriors-recomp/out/

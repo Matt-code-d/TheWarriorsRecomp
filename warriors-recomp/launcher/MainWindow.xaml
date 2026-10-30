@@ -1,0 +1,145 @@
+<Window x:Class="WarriorsLauncher.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="The Warriors — Recomp"
+        Width="980" Height="620"
+        MinWidth="860" MinHeight="520"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource Bg}">
+  <Grid>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="230"/>
+      <ColumnDefinition Width="*"/>
+    </Grid.ColumnDefinitions>
+
+    <Border Grid.Column="0" Background="#090A0C" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Top" Margin="18,28,16,24">
+          <TextBlock Text="THE WARRIORS" FontSize="18" FontWeight="Bold" Foreground="{StaticResource Brass}"/>
+          <TextBlock Text="XBE RECOMP" FontSize="11" Foreground="{StaticResource Mute}" Margin="0,4,0,0"
+                     FontWeight="SemiBold"/>
+        </StackPanel>
+
+        <StackPanel DockPanel.Dock="Bottom" Margin="16,0,16,20">
+          <TextBlock x:Name="StatusInstall" Text="—" FontSize="11" Foreground="{StaticResource Mute}" TextWrapping="Wrap"/>
+          <TextBlock x:Name="StatusLang" Text="" FontSize="11" Foreground="{StaticResource Mute}" Margin="0,4,0,0"/>
+        </StackPanel>
+
+        <StackPanel Margin="0,4,0,0">
+          <Button x:Name="NavPlay" Style="{StaticResource NavBtn}" Content="PLAY" Click="Nav_Click" Tag="active"/>
+          <Button x:Name="NavGraphics" Style="{StaticResource NavBtn}" Content="GRAPHICS" Click="Nav_Click"/>
+          <Button x:Name="NavSetup" Style="{StaticResource NavBtn}" Content="SETUP / ISO" Click="Nav_Click"/>
+          <Button x:Name="NavLanguage" Style="{StaticResource NavBtn}" Content="LANGUAGE" Click="Nav_Click"/>
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <Grid Grid.Column="1" Margin="36,28,36,24">
+      <DockPanel x:Name="PanelPlay" Visibility="Visible">
+        <StackPanel DockPanel.Dock="Top">
+          <TextBlock Style="{StaticResource SectionTitle}" Text="Play"/>
+          <TextBlock Style="{StaticResource SectionSub}"
+                     Text="Launch the port with your EUR disc. First start builds Warriors.dll from your copy (a few minutes). F10 opens in-game settings."/>
+        </StackPanel>
+        <StackPanel VerticalAlignment="Bottom">
+          <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1" Padding="18" Margin="0,0,0,18">
+            <StackPanel>
+              <TextBlock Style="{StaticResource FieldLabel}" Text="GAME BINARY"/>
+              <TextBlock x:Name="TxtExe" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource Bone}"/>
+              <TextBlock Style="{StaticResource FieldLabel}" Text="ASSETS" Margin="0,12,0,4"/>
+              <TextBlock x:Name="TxtAssets" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource Bone}"/>
+              <TextBlock Foreground="{StaticResource Mute}" FontSize="11" Margin="0,14,0,0" TextWrapping="Wrap"
+                         Text="Use the EUR build under warriors-recomp\out\build\release (Warriors.exe + Warriors.dll). Language and graphics are applied from this launcher before launch."/>
+            </StackPanel>
+          </Border>
+          <StackPanel Orientation="Horizontal">
+            <Button x:Name="BtnPlay" Style="{StaticResource PrimaryBtn}" Content="PLAY" Width="160" Click="Play_Click"/>
+            <Button Style="{StaticResource GhostBtn}" Content="Open port folder" Margin="12,0,0,0" Click="OpenPort_Click"/>
+            <Button Style="{StaticResource GhostBtn}" Content="Save" Margin="12,0,0,0" Click="Save_Click"/>
+          </StackPanel>
+          <TextBlock x:Name="TxtPlayMsg" Margin="0,14,0,0" Foreground="{StaticResource Brass}" TextWrapping="Wrap"/>
+        </StackPanel>
+      </DockPanel>
+
+      <DockPanel x:Name="PanelSetup" Visibility="Collapsed">
+        <StackPanel DockPanel.Dock="Top">
+          <TextBlock Style="{StaticResource SectionTitle}" Text="Install from ISO"/>
+          <TextBlock Style="{StaticResource SectionSub}"
+                     Text="Point at your original Xbox EUR dump of The Warriors. Disc-image mode drops the .iso into assets (recommended). Extract mode unpacks default.xbe and data folders."/>
+        </StackPanel>
+        <StackPanel>
+          <TextBlock Style="{StaticResource FieldLabel}" Text="ISO PATH"/>
+          <Grid Margin="0,0,0,14">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="TxtIso" Grid.Column="0"/>
+            <Button Grid.Column="1" Style="{StaticResource GhostBtn}" Content="Browse…" Margin="10,0,0,0" Padding="16,8" Click="BrowseIso_Click"/>
+          </Grid>
+
+          <CheckBox x:Name="ChkExtract" Content="Also extract files with extract-xiso (optional — ISO alone is enough)"/>
+          <ProgressBar x:Name="BarInstall" Height="8" Margin="0,16,0,8" Minimum="0" Maximum="1" Value="0"/>
+          <TextBlock x:Name="TxtInstallDetail" Foreground="{StaticResource Mute}" FontSize="12" TextWrapping="Wrap"/>
+
+          <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+            <Button x:Name="BtnInstall" Style="{StaticResource PrimaryBtn}" Content="INSTALL INTO ASSETS" Click="Install_Click"/>
+            <Button Style="{StaticResource GhostBtn}" Content="Open assets" Margin="12,0,0,0" Click="OpenAssets_Click"/>
+          </StackPanel>
+        </StackPanel>
+      </DockPanel>
+
+      <DockPanel x:Name="PanelGraphics" Visibility="Collapsed">
+        <StackPanel DockPanel.Dock="Top">
+          <TextBlock Style="{StaticResource SectionTitle}" Text="Graphics"/>
+          <TextBlock Style="{StaticResource SectionSub}"
+                     Text="Writes settings.toml beside Warriors.exe (same keys as F10). Apply before PLAY. Vulkan is reserved — this recomp host renders with Direct3D 12 only."/>
+        </StackPanel>
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel>
+            <TextBlock Style="{StaticResource FieldLabel}" Text="GRAPHICS API"/>
+            <ComboBox x:Name="CmbApi" DisplayMemberPath="Label" Margin="0,0,0,14" SelectionChanged="Graphics_Changed"/>
+
+            <TextBlock Style="{StaticResource FieldLabel}" Text="DISPLAY MODE"/>
+            <ComboBox x:Name="CmbDisplayMode" DisplayMemberPath="Label" Margin="0,0,0,14" SelectionChanged="Graphics_Changed"/>
+
+            <TextBlock Style="{StaticResource FieldLabel}" Text="RESOLUTION"/>
+            <ComboBox x:Name="CmbResolution" DisplayMemberPath="Label" Margin="0,0,0,14" SelectionChanged="Graphics_Changed"/>
+
+            <TextBlock Style="{StaticResource FieldLabel}" Text="FPS CAP"/>
+            <ComboBox x:Name="CmbFps" DisplayMemberPath="Label" Margin="0,0,0,14" SelectionChanged="Graphics_Changed"/>
+
+            <TextBlock Style="{StaticResource FieldLabel}" Text="RENDER SCALE"/>
+            <ComboBox x:Name="CmbRenderScale" DisplayMemberPath="Label" Margin="0,0,0,14" SelectionChanged="Graphics_Changed"/>
+
+            <TextBlock Style="{StaticResource FieldLabel}" Text="ANISOTROPIC FILTERING"/>
+            <ComboBox x:Name="CmbAniso" DisplayMemberPath="Label" Margin="0,0,0,14" SelectionChanged="Graphics_Changed"/>
+
+            <CheckBox x:Name="ChkVSync" Content="VSync" Checked="Graphics_Changed" Unchecked="Graphics_Changed"/>
+            <CheckBox x:Name="ChkCustomTex" Content="Custom textures (textures\replacement)" Checked="Graphics_Changed" Unchecked="Graphics_Changed"/>
+
+            <TextBlock x:Name="TxtGfxHint" Margin="0,16,0,0" Foreground="{StaticResource Mute}" TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+              <Button Style="{StaticResource PrimaryBtn}" Content="APPLY TO SETTINGS.TOML" Click="ApplyGraphics_Click"/>
+              <Button Style="{StaticResource GhostBtn}" Content="Reset defaults" Margin="12,0,0,0" Click="ResetGraphics_Click"/>
+            </StackPanel>
+          </StackPanel>
+        </ScrollViewer>
+      </DockPanel>
+
+      <DockPanel x:Name="PanelLanguage" Visibility="Collapsed">
+        <StackPanel DockPanel.Dock="Top">
+          <TextBlock Style="{StaticResource SectionTitle}" Text="Language"/>
+          <TextBlock Style="{StaticResource SectionSub}"
+                     Text="Languages listed from your ISO name (EUR packs: En, Fr, De, Es, It). Written to language.cfg and settings.toml for the EUR host."/>
+        </StackPanel>
+        <StackPanel>
+          <TextBlock Style="{StaticResource FieldLabel}" Text="GAME LANGUAGE"/>
+          <ComboBox x:Name="CmbLanguage" DisplayMemberPath="DisplayName" SelectionChanged="Language_Changed" Margin="0,0,0,12"/>
+          <Button Style="{StaticResource GhostBtn}" Content="Rescan from ISO name" HorizontalAlignment="Left" Click="RescanLang_Click" Padding="16,10"/>
+          <TextBlock x:Name="TxtLangHint" Margin="0,16,0,0" Foreground="{StaticResource Mute}" TextWrapping="Wrap"/>
+        </StackPanel>
+      </DockPanel>
+    </Grid>
+  </Grid>
+</Window>

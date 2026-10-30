@@ -3,15 +3,22 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              StartupUri="MainWindow.xaml">
   <Application.Resources>
-    <!-- Coney asphalt / subway brass — not purple, not cream. -->
-    <SolidColorBrush x:Key="Bg" Color="#0B0C0E"/>
-    <SolidColorBrush x:Key="Panel" Color="#141618"/>
-    <SolidColorBrush x:Key="Line" Color="#2A2E32"/>
-    <SolidColorBrush x:Key="Bone" Color="#E6E2D8"/>
-    <SolidColorBrush x:Key="Mute" Color="#7A7E84"/>
-    <SolidColorBrush x:Key="Brass" Color="#C9A227"/>
-    <SolidColorBrush x:Key="BrassDim" Color="#5C4A12"/>
-    <SolidColorBrush x:Key="Ink" Color="#1C2228"/>
+    <!-- The Warriors: night asphalt, jersey yellow, vest red. Not purple, not cream. -->
+    <SolidColorBrush x:Key="Bg" Color="#070708"/>
+    <SolidColorBrush x:Key="Panel" Color="#121214"/>
+    <SolidColorBrush x:Key="Side" Color="#0A0A0C"/>
+    <SolidColorBrush x:Key="Line" Color="#2C2C30"/>
+    <SolidColorBrush x:Key="Bone" Color="#F2F0EA"/>
+    <SolidColorBrush x:Key="Mute" Color="#8B8680"/>
+    <SolidColorBrush x:Key="Jersey" Color="#FFD100"/>
+    <SolidColorBrush x:Key="JerseyHot" Color="#FFE566"/>
+    <SolidColorBrush x:Key="JerseyDim" Color="#5C4A00"/>
+    <SolidColorBrush x:Key="VestRed" Color="#C8102E"/>
+    <SolidColorBrush x:Key="VestRedDim" Color="#6B0A18"/>
+    <SolidColorBrush x:Key="Ink" Color="#0A0A0A"/>
+    <!-- aliases used by older markup -->
+    <SolidColorBrush x:Key="Brass" Color="#FFD100"/>
+    <SolidColorBrush x:Key="BrassDim" Color="#5C4A00"/>
 
     <Style TargetType="Window">
       <Setter Property="Background" Value="{StaticResource Bg}"/>
@@ -33,18 +40,18 @@
         <Setter.Value>
           <ControlTemplate TargetType="Button">
             <Border x:Name="bd" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"
-                    BorderBrush="{StaticResource Brass}" BorderThickness="0,0,0,0">
+                    BorderBrush="{StaticResource Jersey}" BorderThickness="0">
               <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="#161A1E"/>
-                <Setter Property="Foreground" Value="{StaticResource Bone}"/>
+                <Setter TargetName="bd" Property="Background" Value="#16140C"/>
+                <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
               </Trigger>
               <Trigger Property="Tag" Value="active">
                 <Setter TargetName="bd" Property="BorderThickness" Value="3,0,0,0"/>
-                <Setter TargetName="bd" Property="Background" Value="#1A1810"/>
-                <Setter Property="Foreground" Value="{StaticResource Bone}"/>
+                <Setter TargetName="bd" Property="Background" Value="#1A1608"/>
+                <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -53,8 +60,8 @@
     </Style>
 
     <Style x:Key="PrimaryBtn" TargetType="Button">
-      <Setter Property="Background" Value="{StaticResource Brass}"/>
-      <Setter Property="Foreground" Value="#12100A"/>
+      <Setter Property="Background" Value="{StaticResource Jersey}"/>
+      <Setter Property="Foreground" Value="{StaticResource Ink}"/>
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="Padding" Value="28,14"/>
       <Setter Property="FontSize" Value="15"/>
@@ -68,11 +75,11 @@
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="#E0B83A"/>
+                <Setter TargetName="bd" Property="Background" Value="{StaticResource JerseyHot}"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
-                <Setter TargetName="bd" Property="Background" Value="#2A2E32"/>
-                <Setter Property="Foreground" Value="#555A60"/>
+                <Setter TargetName="bd" Property="Background" Value="#2A2A2E"/>
+                <Setter Property="Foreground" Value="#55555A"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -94,8 +101,8 @@
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brass}"/>
-                <Setter Property="Foreground" Value="{StaticResource Brass}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Jersey}"/>
+                <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -104,25 +111,35 @@
     </Style>
 
     <Style TargetType="TextBox">
-      <Setter Property="Background" Value="#0A0C0E"/>
+      <Setter Property="Background" Value="#0C0C0E"/>
       <Setter Property="Foreground" Value="{StaticResource Bone}"/>
       <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Padding" Value="10,8"/>
-      <Setter Property="CaretBrush" Value="{StaticResource Brass}"/>
+      <Setter Property="CaretBrush" Value="{StaticResource Jersey}"/>
     </Style>
 
     <Style TargetType="ComboBox">
-      <Setter Property="Background" Value="#0A0C0E"/>
+      <Setter Property="Background" Value="#0C0C0E"/>
       <Setter Property="Foreground" Value="{StaticResource Bone}"/>
       <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
       <Setter Property="Padding" Value="8,6"/>
       <Setter Property="MinHeight" Value="32"/>
     </Style>
     <Style TargetType="ComboBoxItem">
-      <Setter Property="Foreground" Value="#E6E2D8"/>
-      <Setter Property="Background" Value="#141618"/>
+      <Setter Property="Foreground" Value="{StaticResource Bone}"/>
+      <Setter Property="Background" Value="#121214"/>
       <Setter Property="Padding" Value="8,6"/>
+      <Style.Triggers>
+        <Trigger Property="IsHighlighted" Value="True">
+          <Setter Property="Background" Value="#2A2208"/>
+          <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
+        </Trigger>
+        <Trigger Property="IsSelected" Value="True">
+          <Setter Property="Background" Value="#3A2E00"/>
+          <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
+        </Trigger>
+      </Style.Triggers>
     </Style>
 
     <Style TargetType="CheckBox">
@@ -130,10 +147,16 @@
       <Setter Property="Margin" Value="0,6,0,6"/>
     </Style>
 
+    <Style TargetType="ProgressBar">
+      <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
+      <Setter Property="Background" Value="#1A1A1E"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+
     <Style x:Key="SectionTitle" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="22"/>
+      <Setter Property="FontSize" Value="26"/>
       <Setter Property="FontWeight" Value="Bold"/>
-      <Setter Property="Foreground" Value="{StaticResource Bone}"/>
+      <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
       <Setter Property="Margin" Value="0,0,0,6"/>
     </Style>
 
@@ -145,9 +168,9 @@
     </Style>
 
     <Style x:Key="FieldLabel" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="{StaticResource Mute}"/>
+      <Setter Property="Foreground" Value="{StaticResource VestRed}"/>
       <Setter Property="FontSize" Value="11"/>
-      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="FontWeight" Value="Bold"/>
       <Setter Property="Margin" Value="0,0,0,4"/>
     </Style>
   </Application.Resources>

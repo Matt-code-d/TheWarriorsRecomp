@@ -2560,6 +2560,7 @@ bool UnitTexcoords(const Assembled& a) {
     constexpr float kLo = -1e-4f;
     constexpr float kHi = 1.0001f;
     constexpr uint32_t kSmallDrawVertices = 4096;  // most vertices a small draw has
+    // Raw buffer path only — converted float4 vertices are handled elsewhere; do not guess UV regs.
     if (!a.vertices.empty() || !a.vertex_count || a.vertex_count > kSmallDrawVertices) return false;
     bool any = false;
     for (int r = 0; r < 16; r++) {

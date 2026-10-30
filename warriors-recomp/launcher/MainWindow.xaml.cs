@@ -49,8 +49,51 @@ public partial class MainWindow : Window
         SyncGraphicsUiFromSettings();
         RefreshStatus();
         RescanLanguages(preferOs: true);
+        ApplyLauncherUi();
         ShowPanel("PLAY");
         _uiReady = true;
+    }
+
+    private void ApplyLauncherUi()
+    {
+        var t = LauncherText.ForLanguageId(_settings.UserLanguage);
+        _settings.UiLocale = LauncherText.CodeForId(_settings.UserLanguage);
+        Title = t.WindowTitle;
+        NavPlay.Content = t.NavPlay;
+        NavGraphics.Content = t.NavGraphics;
+        NavSetup.Content = t.NavSetup;
+        NavLanguage.Content = t.NavLanguage;
+        LblPlayTitle.Text = t.PlayTitle;
+        LblPlaySub.Text = t.PlaySub;
+        LblGameBinary.Text = t.GameBinary;
+        LblAssets.Text = t.Assets;
+        LblPlayNote.Text = t.PlayNote;
+        BtnPlay.Content = t.BtnPlay;
+        BtnOpenPort.Content = t.OpenPort;
+        BtnSave.Content = t.Save;
+        LblSetupTitle.Text = t.SetupTitle;
+        LblSetupSub.Text = t.SetupSub;
+        LblIsoPath.Text = t.IsoPath;
+        BtnBrowseIso.Content = t.Browse;
+        ChkExtract.Content = t.ExtractAlso;
+        BtnInstall.Content = t.Install;
+        BtnOpenAssets.Content = t.OpenAssets;
+        LblGfxTitle.Text = t.GfxTitle;
+        LblGfxSub.Text = t.GfxSub;
+        LblGfxApi.Text = t.GfxApi;
+        LblDisplayMode.Text = t.DisplayMode;
+        LblResolution.Text = t.Resolution;
+        LblFpsCap.Text = t.FpsCap;
+        LblRenderScale.Text = t.RenderScale;
+        LblAniso.Text = t.Aniso;
+        ChkVSync.Content = t.VSync;
+        ChkCustomTex.Content = t.CustomTex;
+        BtnApplyGfx.Content = t.ApplyGfx;
+        BtnResetGfx.Content = t.ResetGfx;
+        LblLangTitle.Text = t.LangTitle;
+        LblLangSub.Text = t.LangSub;
+        LblGameLanguage.Text = t.GameLanguage;
+        BtnRescanLang.Content = t.RescanLang;
     }
 
     private void FillGraphicsCombos()
@@ -235,8 +278,11 @@ public partial class MainWindow : Window
         TxtExe.Text = File.Exists(exe) ? exe : "(Warriors.exe missing — extract Warriors.zip into port/)";
         TxtAssets.Text = _settings.AssetsRoot;
         StatusInstall.Text = GameProcess.DescribeInstall(_settings);
+        var ui = LauncherText.ForLanguageId(_settings.UserLanguage);
         var lang = LanguageCatalog.All.FirstOrDefault(l => l.Id == _settings.UserLanguage);
-        StatusLang.Text = lang != null ? $"Language: {lang.DisplayName}" : $"Language id {_settings.UserLanguage}";
+        StatusLang.Text = lang != null
+            ? $"{ui.StatusLanguage}: {lang.DisplayName}"
+            : $"{ui.StatusLanguage} id {_settings.UserLanguage}";
         BtnPlay.IsEnabled = File.Exists(exe);
         BtnPlay.Opacity = BtnPlay.IsEnabled ? 1 : 0.45;
     }
@@ -256,11 +302,15 @@ public partial class MainWindow : Window
         if (CmbLanguage.SelectedItem is DetectedLanguage sel)
         {
             _settings.UserLanguage = sel.Id;
-            TxtLangHint.Text =
-                $"Game language → XC_LANGUAGE={sel.Id} ({sel.DisplayName}). " +
-                $"Packs on this ISO: {string.Join(", ", langs.Select(l => l.DisplayName))}. " +
-                "Written to language.cfg + settings.toml beside Warriors.exe; host reads env XBE_LANGUAGE / XC_LANGUAGE.";
+            _settings.UiLocale = LauncherText.CodeForId(sel.Id);
+            var ui = LauncherText.ForLanguageId(sel.Id);
+            TxtLangHint.Text = string.Format(
+                ui.LangHint,
+                sel.Id,
+                sel.DisplayName,
+                string.Join(", ", langs.Select(l => l.DisplayName)));
         }
+        ApplyLauncherUi();
         RefreshStatus();
     }
 
@@ -269,12 +319,13 @@ public partial class MainWindow : Window
         if (!_uiReady) return;
         if (CmbLanguage.SelectedItem is not DetectedLanguage lang) return;
         _settings.UserLanguage = lang.Id;
+        _settings.UiLocale = LauncherText.CodeForId(lang.Id);
         _settings.Save();
         GameProcess.WriteLanguageSidecar(_settings);
         GameSettingsToml.ApplyFromLauncher(_settings);
-        TxtLangHint.Text =
-            $"Applied XC_LANGUAGE={lang.Id} ({lang.DisplayName}) → language.cfg. " +
-            "Restart PLAY for the title to pick UI/audio.";
+        ApplyLauncherUi();
+        var ui = LauncherText.ForLanguageId(lang.Id);
+        TxtLangHint.Text = string.Format(ui.LangApplied, lang.Id, lang.DisplayName);
         RefreshStatus();
     }
 
@@ -285,7 +336,7 @@ public partial class MainWindow : Window
         var dlg = new OpenFileDialog
         {
             Filter = "Xbox disc image (*.iso)|*.iso|All files (*.*)|*.*",
-            Title = "Select The Warriors EUR ISO",
+            Title = LauncherText.ForLanguageId(_settings.UserLanguage).IsoBrowseTitle,
         };
         if (!string.IsNullOrWhiteSpace(_settings.IsoPath) && File.Exists(_settings.IsoPath))
             dlg.InitialDirectory = Path.GetDirectoryName(_settings.IsoPath);

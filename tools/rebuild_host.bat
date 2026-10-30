@@ -14,8 +14,8 @@ if errorlevel 1 exit /b 1
 echo === build Warriors + Warriors_code ===
 cmake --build out\build\release --target Warriors Warriors_code -j 32
 if errorlevel 1 exit /b 1
-rem DLL must be newer than EXE or the first-start path rebuilds 129 files
-powershell -NoProfile -Command "if (Test-Path 'out\build\release\Warriors.dll') { (Get-Item 'out\build\release\Warriors.dll').LastWriteTime = Get-Date }"
+rem Keep built.txt stamp in sync (EXE size+mtime+XBE sha1) so PLAY does not recompile the game DLL.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0sync_game_stamp.ps1"
 echo === publish launcher beside EXE + into port\ ===
 dotnet build launcher\WarriorsLauncher.csproj -c Release -o out\build\release
 if errorlevel 1 exit /b 1

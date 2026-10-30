@@ -36,7 +36,13 @@ If you re-extract the ISO, re-run `tools\alias_eur_movies.ps1` so NTSC-named `.b
 
 ## Next
 
-- [ ] Confirm light corona squares after 720p video flags + DrawIndexedVerticesUP hook
+- [ ] Light corona still draws as a hard square (sampler hack reverted — it made the billboard worse / hid the character)
+- [x] Launcher UI follows selected game language (En/De/Fr/Es/It)
+- [x] Launcher Warriors theme (jersey yellow / vest red / asphalt)
 - [ ] Confirm in-game: logos / menu / language / audio / first mission
-- [ ] Optional: KBM / camera / prompts hooks (NTSC addresses appear valid)
 - [ ] Optional: richer XACT host (pitch / 3D voice data) if audio is thin
+
+## Roadmap
+
+- [ ] **Mouse + keyboard** — full KBM support, enable/disable from the launcher (alongside gamepad)
+- [ ] **Online co-op multiplayer** — networked co-op (host/join); scope after single-player bring-up is solid

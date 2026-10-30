@@ -121,7 +121,7 @@ cd warriors-recomp
 
 `rebuild_host.bat` builds `Warriors.exe` / `Warriors.dll`, publishes `WarriorsLauncher.exe` next to them, and copies the launcher into `..\port\` when that folder exists.
 
-**Important:** `Warriors.dll` must stay **newer** than `Warriors.exe`. If the exe is newer and `compiler\work\Warriors\built.txt` is missing, the first start rebuilds ~129 translation units (looks like “the game won’t start”).
+**Important:** the first PLAY builds `Warriors.dll` from your `default.xbe` (one-time, a few minutes). After that it should **not** rebuild every launch. It only rebuilds if the XBE changes or `Warriors.exe` is replaced (host rebuild). `tools\rebuild_host.bat` refreshes `compiler\work\Warriors\built.txt` so a host rebuild does not force another full game-code compile.
 
 ### Launcher only
 
@@ -136,6 +136,15 @@ dotnet build warriors-recomp\launcher\WarriorsLauncher.csproj -c Release -o warr
 - Some light coronas / flares may look blocky; 720p video flags and DrawIndexedVerticesUP hooks are in progress.
 - Stock Bink symbols are not hooked (EUR BINK is in-image); movies use guest Bink.
 - Vulkan is **not** implemented in this SDK — launcher option is reserved.
+
+---
+
+## Roadmap
+
+Planned (not in this alpha yet):
+
+- **Mouse + keyboard** — full playability with KBM (camera, combat, menus, minigames), with a launcher toggle to enable/disable alongside gamepad.
+- **Online co-op multiplayer** — networked co-op mode (session join/host from the launcher or in-game flow). Details and scope TBD as the single-player bring-up stabilizes.
 
 ---
 

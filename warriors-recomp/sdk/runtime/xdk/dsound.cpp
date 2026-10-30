@@ -91,7 +91,6 @@ namespace {
 constexpr uint32_t kStreamVtable = SYM(DSound_StreamVtable);  // CDirectSoundStream XMediaObject vtable
 constexpr uint32_t kStreamVtable2 = SYM(DSound_StreamVtable2);
 constexpr uint32_t kPacketPending = 0x8000000A, kFlushed = 0x80004004;  // E_PENDING, E_ABORT
-
 struct Packet {
     uint32_t data, size, completed_ptr, status_ptr, context;
     uint32_t used = 0;
@@ -139,6 +138,10 @@ struct Voice {
     bool playing = false, looping = false, paused = false;
     bool sync = false;  // held until IDirectSound_SynchPlayback
     bool active = false, ending = false;  // stream: took a packet since it went quiet, quiet again once they run out
+    // XACT stream stop rules (library voice 0x3B1EBD / FlushEx 0x3B1353): PAUSENOACTIVATE + async flush
+    // hold packets until Pause(0). Without this, late Process after skip restarts cutscene dialogue/music.
+    bool hold = false;
+    bool flushing = false;
     double pos = 0;  // frames
     uint32_t freq = 0;
     // stream
@@ -162,6 +165,8 @@ struct Voice {
     int64_t block[2] = {-1, -1};
     uint8_t last = 0;  // decoded[last] holds block[last]
     int16_t decoded[2][65 * 8];
+    // SilenceAll stamps this; Play after a stamp shows cutscene buffers resurrecting under gameplay.
+    uint32_t silence_gen = 0;
 };
 
 struct Done {
@@ -170,6 +175,68 @@ struct Done {
 
 std::recursive_mutex g_lock;
 std::map<uint32_t, Voice> g_voices;
+
+// After PlayMovie skip/end: Bink may still Process() leftover packets. Drop them briefly.
+// Do NOT hold/block post-movie XACT for long: after Bink (l99_in) the title continues an in-engine
+// cutscene (Coney Island card) that needs those streams/beds — a 25s hold muted the whole scene.
+using SilenceClock = std::chrono::steady_clock;
+std::atomic<SilenceClock::time_point> g_silence_until{SilenceClock::time_point{}};
+std::atomic<SilenceClock::time_point> g_audio_watch_until{SilenceClock::time_point{}};
+std::atomic<uint32_t> g_silence_gen{0};
+std::atomic<int> g_watch_play_logs{0};
+std::atomic<int> g_watch_pause_logs{0};
+std::atomic<int> g_watch_stop_logs{0};
+std::atomic<int> g_watch_data_logs{0};
+bool SilenceActive() { return SilenceClock::now() < g_silence_until.load(std::memory_order_relaxed); }
+bool AudioWatchActive() {
+    return SilenceClock::now() < g_audio_watch_until.load(std::memory_order_relaxed);
+}
+void ArmSilence(std::chrono::milliseconds ms) {
+    g_silence_until.store(SilenceClock::now() + ms, std::memory_order_relaxed);
+}
+void ArmAudioWatch(std::chrono::milliseconds ms) {
+    g_audio_watch_until.store(SilenceClock::now() + ms, std::memory_order_relaxed);
+    g_watch_play_logs.store(0, std::memory_order_relaxed);
+    g_watch_pause_logs.store(0, std::memory_order_relaxed);
+    g_watch_stop_logs.store(0, std::memory_order_relaxed);
+    g_watch_data_logs.store(0, std::memory_order_relaxed);
+}
+
+struct VoiceCensus {
+    size_t total = 0, buffers = 0, streams = 0;
+    size_t playing = 0, paused = 0, sync = 0, active = 0;
+    size_t with_data = 0, with_packets = 0, vol_on = 0, mixable = 0;
+    size_t resurrect = 0;  // buffers with data tagged by current silence gen
+};
+
+VoiceCensus MakeCensus(uint32_t gen) {
+    VoiceCensus c;
+    c.total = g_voices.size();
+    for (auto& [obj, v] : g_voices) {
+        if (v.stream) c.streams++;
+        else c.buffers++;
+        if (v.playing) c.playing++;
+        if (v.paused) c.paused++;
+        if (v.sync) c.sync++;
+        if (v.active) c.active++;
+        if (v.data && v.bytes) c.with_data++;
+        if (!v.packets.empty()) c.with_packets++;
+        if (v.volume > 1e-4f) c.vol_on++;
+        bool mix = !v.paused && !v.sync && (v.stream ? (!v.hold && !v.flushing) : v.playing);
+        if (mix) c.mixable++;
+        if (!v.stream && v.data && v.bytes && v.silence_gen == gen && gen) c.resurrect++;
+        (void)obj;
+    }
+    return c;
+}
+
+void LogCensus(const char* tag, uint32_t gen) {
+    VoiceCensus c = MakeCensus(gen);
+    LOGR("dsound: %s n=%zu buf=%zu strm=%zu play=%zu pause=%zu sync=%zu active=%zu data=%zu pkts=%zu "
+         "vol=%zu mix=%zu tagged=%zu sil=%d watch=%d gen=%u",
+         tag, c.total, c.buffers, c.streams, c.playing, c.paused, c.sync, c.active, c.with_data, c.with_packets,
+         c.vol_on, c.mixable, c.resurrect, SilenceActive() ? 1 : 0, AudioWatchActive() ? 1 : 0, gen);
+}
 float g_listener[3] = {}, g_front[3] = {0, 0, 1}, g_top[3] = {0, 1, 0};
 // Completed packets' callbacks, run as the XDK runs them: in DirectSoundDoWork on the title's thread, so they never
 // overlap the title's own stream code. A stream flushed or released runs its own at once, before it is gone.
@@ -500,6 +567,33 @@ void Deactivate(Voice& v) {
     if (v.active) v.active = v.paused = v.ending = false;
 }
 
+// stream playing its packets: PAUSENOACTIVATE hold or async FlushEx is not live
+bool Live(const Voice& v) { return v.active && !v.hold && !v.flushing; }
+
+bool Audible(const Voice& v) {
+    if (v.paused || v.sync) return false;
+    if (v.stream) return !v.hold && !v.flushing;
+    return v.playing;
+}
+
+// the stream's callbacks still queued and those of its flushed packets, in order, go to the calling thread
+void FlushStream(Voice& v) {
+    for (auto& pk : v.packets) Complete(v, pk, kFlushed);
+    v.packets.clear();
+    v.pos = 0;
+    v.flushing = false;
+    // hold stays until Pause(0) — same as console PAUSENOACTIVATE after XACT Stop
+    for (auto it = g_done.begin(); it != g_done.end();) {
+        if (it->voice != v.obj) {
+            ++it;
+            continue;
+        }
+        t_flushed.push_back(*it);
+        it = g_done.erase(it);
+    }
+    Deactivate(v);
+}
+
 // where a frame and the one after it are read from, for interpolation
 struct Cursor {
     uint32_t data;
@@ -611,15 +705,70 @@ void Render(float* out, uint32_t frames) {
     static std::vector<float> bins;  // the output thread alone renders
     bins.assign(size_t(frames) * kBins, 0.0f);
     std::lock_guard<std::recursive_mutex> lock(g_lock);
+    // Only drop late Bink stream packets briefly — do not mute the in-engine cutscene that follows.
+    if (SilenceActive()) {
+        for (auto& [obj, v] : g_voices) {
+            if (!v.stream || v.packets.empty()) continue;
+            v.packets.clear();
+            v.pos = 0;
+            Deactivate(v);
+            (void)obj;
+        }
+    }
+    size_t mixed = 0;
+    float peak = 0;
     for (auto& [obj, v] : g_voices) {
-        if (v.paused || v.sync || (!v.stream && !v.playing)) continue;
+        if (!Audible(v)) continue;
         MixVoice(v, bins.data(), frames);
+        mixed++;
+        (void)obj;
     }
     if (dsp::Loaded()) dsp::Run(bins.data(), frames);
     for (uint32_t i = 0; i < frames; i++) {
         const float* b = &bins[size_t(i) * kBins];
-        out[i * 2] = std::clamp(b[kFrontLeft] + kFold * (b[kCentre] + b[kBackLeft]), -1.0f, 1.0f);
-        out[i * 2 + 1] = std::clamp(b[kFrontRight] + kFold * (b[kCentre] + b[kBackRight]), -1.0f, 1.0f);
+        float L = std::clamp(b[kFrontLeft] + kFold * (b[kCentre] + b[kBackLeft]), -1.0f, 1.0f);
+        float R = std::clamp(b[kFrontRight] + kFold * (b[kCentre] + b[kBackRight]), -1.0f, 1.0f);
+        out[i * 2] = L;
+        out[i * 2 + 1] = R;
+        peak = std::max(peak, std::max(std::fabs(L), std::fabs(R)));
+    }
+    // After movie skip: periodic mixer snapshot so we see who starts playing under the tutorial.
+    if (AudioWatchActive()) {
+        static SilenceClock::time_point next_snap{};
+        auto now = SilenceClock::now();
+        if (now >= next_snap) {
+            next_snap = now + std::chrono::milliseconds(500);
+            uint32_t gen = g_silence_gen.load(std::memory_order_relaxed);
+            LogCensus("mix", gen);
+            LOGR("dsound: mix-peak=%.4f mixed=%zu", peak, mixed);
+            // Top mixable buffers (by bytes * volume) — who is the soundtrack.
+            struct Hit {
+                uint32_t obj;
+                uint32_t bytes;
+                float vol;
+                double pos;
+                bool looping;
+                uint32_t gen;
+            };
+            Hit top[4]{};
+            int ntop = 0;
+            for (auto& [obj, v] : g_voices) {
+                if (!Audible(v) || v.stream) continue;
+                Hit h{obj, v.bytes, v.volume, v.pos, v.looping, v.silence_gen};
+                int slot = ntop < 4 ? ntop++ : -1;
+                if (slot < 0) {
+                    slot = 0;
+                    for (int i = 1; i < 4; i++)
+                        if (top[i].bytes * top[i].vol < top[slot].bytes * top[slot].vol) slot = i;
+                    if (h.bytes * h.vol <= top[slot].bytes * top[slot].vol) continue;
+                }
+                top[slot] = h;
+            }
+            for (int i = 0; i < ntop; i++) {
+                LOGR("dsound: mix-buf[%d] obj=%08X bytes=%u vol=%.3f pos=%.0f loop=%d tagged=%u", i, top[i].obj,
+                     top[i].bytes, top[i].vol, top[i].pos, top[i].looping ? 1 : 0, top[i].gen);
+            }
+        }
     }
 }
 
@@ -630,6 +779,20 @@ int64_t NowMs() {
 
 void Run(X86Context& ctx, const std::vector<Done>& done) {
     for (const Done& d : done) CallGuest(ctx, d.callback, {d.context, d.packet_context, d.status});
+}
+
+// Async FlushEx completes here (title thread / pump): hand packets back, then run callbacks so the next
+// XACT cue's Pause(0) is not held by leftover cutscene Process traffic.
+std::vector<Done> TakeDone() {
+    for (auto& [obj, v] : g_voices) {
+        if (v.stream && v.flushing) FlushStream(v);
+        (void)obj;
+    }
+    std::vector<Done> done;
+    done.swap(t_flushed);
+    done.insert(done.end(), g_done.begin(), g_done.end());
+    g_done.clear();
+    return done;
 }
 
 void Start() {
@@ -645,8 +808,7 @@ void Start() {
                 std::unique_lock<std::recursive_mutex> lock(g_lock);
                 g_done_cv.wait_for(lock, std::chrono::milliseconds(50));
                 if (NowMs() - g_pumped < kPumpMs) continue;
-                done.assign(g_done.begin(), g_done.end());
-                g_done.clear();
+                done = TakeDone();
             }
             Run(ctx, done);
         }
@@ -844,8 +1006,7 @@ HLE_STDCALL(DirectSoundDoWork, 0) {
     std::vector<Done> done;
     {
         std::lock_guard<std::recursive_mutex> lock(g_lock);
-        done.assign(g_done.begin(), g_done.end());
-        g_done.clear();
+        done = TakeDone();
     }
     Run(ctx, done);
     return 0;
@@ -967,6 +1128,13 @@ BUFFER(SetBufferData, 3) {
     v.play_start = v.loop_start = 0;
     v.pos = 0;
     ForgetBlocks(v);
+    if (AudioWatchActive()) {
+        v.silence_gen = 0;
+        int n = g_watch_data_logs.fetch_add(1, std::memory_order_relaxed);
+        if (n < 40)
+            LOGR("dsound: SetBufferData obj=%08X ptr=%08X bytes=%u play=%d (watch #%d)", v.obj, v.data, v.bytes,
+                 v.playing ? 1 : 0, n);
+    }
     return 0;
 }
 BUFFER(Play, 4) {
@@ -975,19 +1143,42 @@ BUFFER(Play, 4) {
     v.looping = a[3] & 1;
     if (a[3] & 2) v.pos = 0;
     v.sync = a[3] & 4;
+    if (AudioWatchActive()) {
+        uint32_t gen = g_silence_gen.load(std::memory_order_relaxed);
+        int n = g_watch_play_logs.fetch_add(1, std::memory_order_relaxed);
+        if (n < 80)
+            LOGR("dsound: Play obj=%08X flags=%X bytes=%u vol=%.3f pos=%.0f loop=%d sync=%d tagged=%u%s (watch #%d)",
+                 v.obj, a[3], v.bytes, v.volume, v.pos, v.looping ? 1 : 0, v.sync ? 1 : 0, v.silence_gen,
+                 (v.silence_gen && v.silence_gen == gen) ? " RESURRECT" : "", n);
+    }
     return 0;
 }
 BUFFER(Stop, 1) {
+    if (AudioWatchActive()) {
+        int n = g_watch_stop_logs.fetch_add(1, std::memory_order_relaxed);
+        if (n < 40) LOGR("dsound: Stop obj=%08X was_play=%d pos=%.0f (watch #%d)", v.obj, v.playing ? 1 : 0, v.pos, n);
+    }
     v.playing = false;
     return 0;
 }
 // (this, time low, time high, flags): stops now, the release envelope is not reproduced
 BUFFER(StopEx, 4) {
+    if (AudioWatchActive()) {
+        int n = g_watch_stop_logs.fetch_add(1, std::memory_order_relaxed);
+        if (n < 40)
+            LOGR("dsound: StopEx obj=%08X was_play=%d pos=%.0f (watch #%d)", v.obj, v.playing ? 1 : 0, v.pos, n);
+    }
     v.playing = false;
     return 0;
 }
 // (this, flags): 0 resumes, 1 pauses, 2 holds until IDirectSound_SynchPlayback
 BUFFER(Pause, 2) {
+    if (AudioWatchActive()) {
+        int n = g_watch_pause_logs.fetch_add(1, std::memory_order_relaxed);
+        if (n < 80)
+            LOGR("dsound: Pause obj=%08X flags=%u play=%d pos=%.0f tagged=%u (watch #%d)", v.obj, a[1],
+                 v.playing ? 1 : 0, v.pos, v.silence_gen, n);
+    }
     v.paused = a[1] == 1;
     v.sync = a[1] == 2;
     return 0;
@@ -1136,22 +1327,6 @@ HLE_STDCALL(DirectSoundCreateStream, 2) {
     }                                                           \
     static uint32_t str_##name([[maybe_unused]] Voice& v, [[maybe_unused]] const Args& a)
 
-// the stream's callbacks still queued and those of its flushed packets, in order, go to the calling thread
-static void FlushStream(Voice& v) {
-    for (auto& pk : v.packets) Complete(v, pk, kFlushed);
-    v.packets.clear();
-    v.pos = 0;
-    for (auto it = g_done.begin(); it != g_done.end();) {
-        if (it->voice != v.obj) {
-            ++it;
-            continue;
-        }
-        t_flushed.push_back(*it);
-        it = g_done.erase(it);
-    }
-    Deactivate(v);
-}
-
 STREAM(AddRef, 1) { return uint32_t(++v.refs); }
 STREAM(SetFormat, 2) {
     FlushStream(v);
@@ -1184,6 +1359,12 @@ STREAM(Process, 3) {
     uint32_t in = a[1];
     if (!in) return 0;
     Packet pk{R32(in), R32(in + 4), R32(in + 8), R32(in + 12), R32(in + 16)};
+    // Movie just ended/skipped: acknowledge packets but do not mix them (stops Bink audio bleed).
+    if (SilenceActive()) {
+        if (pk.completed_ptr) W32(pk.completed_ptr, 1);
+        if (pk.status_ptr) W32(pk.status_ptr, kFlushed);
+        return 0;
+    }
     if (pk.completed_ptr) W32(pk.completed_ptr, 0);
     if (pk.status_ptr) W32(pk.status_ptr, kPacketPending);
     v.packets.push_back(pk);
@@ -1201,14 +1382,58 @@ STREAM(Flush, 1) {
     FlushStream(v);
     return 0;
 }
+// (this, time low, time high, flags). 0 flushes now. Else async stop: hold until Pause(0).
+// XACT Stop → FlushEx then later Pause(0) for the next cue. Late Process after skip must not
+// restart the old cue (Antriksh/XBERecomp cutscene-audio fix — same rules, our mixer).
 STREAM(FlushEx, 4) {
-    if (a[3] && !v.active) return 0;
-    FlushStream(v);
+    uint32_t flags = a[3];
+    if (!flags) {
+        FlushStream(v);
+        return 0;
+    }
+    bool live = Live(v);
+    // Envelope release (flag 4) not modelled yet — still hold + async flush like a hard stop.
+    v.hold = true;
+    if ((flags & 4) && !live) return 0;
+    v.flushing = true;
+    if (AudioWatchActive()) {
+        int n = g_watch_stop_logs.fetch_add(1, std::memory_order_relaxed);
+        if (n < 40)
+            LOGR("dsound: FlushEx async obj=%08X flags=%u live=%d hold=1 flushing=1 pkts=%zu (watch #%d)", v.obj,
+                 flags, live ? 1 : 0, v.packets.size(), n);
+    }
     return 0;
 }
+// (this, mode): 0 resume (clears hold), 1 pause, 2 sync, 3 PAUSENOACTIVATE
 STREAM(Pause, 2) {
-    v.paused = a[1] == 1;
-    v.sync = a[1] == 2;
+    if (AudioWatchActive()) {
+        int n = g_watch_pause_logs.fetch_add(1, std::memory_order_relaxed);
+        if (n < 80)
+            LOGR("dsound: StreamPause obj=%08X flags=%u pkts=%zu hold=%d flush=%d (watch #%d)", v.obj, a[1],
+                 v.packets.size(), v.hold ? 1 : 0, v.flushing ? 1 : 0, n);
+    }
+    switch (a[1]) {
+        case 0:
+            v.hold = v.paused = v.sync = false;
+            break;
+        case 1:
+            v.paused = true;
+            v.sync = false;
+            break;
+        case 2:
+            v.sync = true;
+            v.paused = false;
+            break;
+        case 3:
+            if (Live(v)) {
+                v.paused = v.sync = false;
+            } else {
+                v.hold = true;
+            }
+            break;
+        default:
+            return 0x80004005u;
+    }
     return 0;
 }
 STREAM(SetVolume, 2) {
@@ -1248,3 +1473,38 @@ STREAM(SetPosition, 5) {
 }
 STREAM(SetVelocity, 5) { return 0; }
 STREAM(SetI3DL2Source, 3) { return 0; }
+
+// After a skipped Bink movie the title may leave stream packets queued; streams mix without
+// DSBSTATUS_PLAYING, so audio keeps playing under gameplay until the queue drains.
+namespace xdk {
+void DirectSoundSilenceAll() {
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    uint32_t gen = g_silence_gen.fetch_add(1, std::memory_order_relaxed) + 1;
+    LogCensus("SilenceAll-before", gen);
+    size_t n = g_voices.size(), streams = 0, stopped = 0, with_data = 0;
+    for (auto& [obj, v] : g_voices) {
+        // Hard stop + rewind. Pausing left mid-cue buffers that Pause(0) resumed as
+        // cutscene "character presentation" music under the tutorial (65 buffers, 0 streams).
+        bool live = v.playing || v.active || (v.stream && !v.packets.empty());
+        if (v.stream) {
+            FlushStream(v);
+            streams++;
+        }
+        if (live || v.playing) stopped++;
+        if (v.data && v.bytes) with_data++;
+        v.playing = false;
+        v.paused = false;
+        v.sync = false;
+        v.pos = 0;
+        v.silence_gen = gen;  // Play on these = cutscene buffer resurrect
+        ForgetBlocks(v);
+        Deactivate(v);
+        (void)obj;
+    }
+    ArmSilence(std::chrono::milliseconds(2000));
+    ArmAudioWatch(std::chrono::milliseconds(20000));
+    LOGR("dsound: SilenceAll voices=%zu streams=%zu stopped=%zu with_data=%zu gen=%u (hard stop, not pause)", n,
+         streams, stopped, with_data, gen);
+    LogCensus("SilenceAll-after", gen);
+}
+}  // namespace xdk

@@ -944,6 +944,17 @@ std::string PixelHlsl(const PixelKey& k) {
         body += "float4 outc = float4(lerp(fogin.rgb, cur.rgb, fogin.a), cur.a);\n";
     }
     if (k.alphatest) body += "alphatest(outc.a);\n";
+    // Soft light cookie quads: title falloff is lost (wrap/aniso/opaque cookie) → hard ground square.
+    // Radial mask in UV space restores a soft circle without touching other draws.
+    if (k.soft_cookie) {
+        body += "{\n";
+        body += "    float2 _sc = tc0.w != 0 && abs(tc0.w) > 1e-5 ? tc0.xy / tc0.w : tc0.xy;\n";
+        body += "    float2 _sd = _sc - 0.5;\n";
+        body += "    float _sf = saturate(1.0 - 4.0 * dot(_sd, _sd));\n";
+        body += "    _sf *= _sf;\n";
+        body += "    outc.rgb *= _sf;\n";
+        body += "}\n";
+    }
     body += Hooks().Output() + "return outc;\n}\n";
     s += body;
     return k.quad ? QuadHlsl(std::move(s)) : s;

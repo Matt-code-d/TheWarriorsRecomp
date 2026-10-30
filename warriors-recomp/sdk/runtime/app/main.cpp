@@ -230,6 +230,15 @@ void Pace() {
         next = now;
         return;
     }
+    // Present(1) already waits on the vertical blank. A software wait at or above the refresh
+    // rate stacks a second limiter after that and reads as hitchy ("hitting FPS but not smooth").
+    if (Get().vsync) {
+        uint32_t hz = RefreshRate();
+        if (!hz || cap >= hz) {
+            next = now;
+            return;
+        }
+    }
     auto period = std::chrono::nanoseconds(1000000000ull / cap);
     next += period;
     if (next < now - period) next = now;

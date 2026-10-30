@@ -36,10 +36,12 @@ If you re-extract the ISO, re-run `tools\alias_eur_movies.ps1` so NTSC-named `.b
 
 ## Next
 
-- [ ] Light corona still draws as a hard square (sampler hack reverted — it made the billboard worse / hid the character)
+- [ ] Tutorial soft-light square: diag showed `src=302 dst=303` alpha cookies (not additive). SoftLightBlend restored for alpha; soft_cookie + border on small no-Z-write quads.
+- [x] Cutscene audio under tutorial: SilenceAll had **paused** 65 XACT buffers; game `Pause(0)` resumed mid-cue presentation music. Now **hard stop + rewind** (inspired by stop-on-skip pattern, not pause). Drop late stream Process 2s.
+- [x] Frame pacing: with VSync on and `fps_cap` ≥ monitor Hz, skip software `Pace()` after `Present` (double-wait was the hitch). Cap below refresh still software-limited.
 - [x] Launcher UI follows selected game language (En/De/Fr/Es/It)
 - [x] Launcher Warriors theme (jersey yellow / vest red / asphalt)
-- [ ] Confirm in-game: logos / menu / language / audio / first mission
+- [ ] Confirm in-game: logos / menu / language / audio / first mission / tutorial glow
 - [ ] Optional: richer XACT host (pitch / 3D voice data) if audio is thin
 
 ## Roadmap

@@ -582,7 +582,8 @@ private:
     void CaptureShader(const char* kind, uint64_t key, const std::string& src);
     void SetTextureViewsAndSamplers(const State& s, const Assembled& a, DrawTextures& stages);
     uint32_t EnsureViewSet(const DrawTextures& stages);
-    uint32_t EnsureStageSamplers(const State& s, const DrawTextures& stages, bool clamp);
+    uint32_t EnsureStageSamplers(const State& s, const DrawTextures& stages, bool clamp, bool soft_border,
+                                 bool skip_forced_aniso);
     void SetViewportScissor(const State& s, uint32_t gw);
     void SetBlendFactorStencilRef(const State& s);
     void UpdateTargetUsed(uint32_t data);
@@ -1969,7 +1970,8 @@ constexpr uint32_t kTexfAnisotropic = 3;
 constexpr uint32_t kTaddressWrap = 1;
 constexpr uint32_t kTaddressClamp = 3;
 
-D3D12_SAMPLER_DESC StageSampler(const State& s, int i, const DrawTextures& stages, bool clamp, uint32_t aniso) {
+D3D12_SAMPLER_DESC StageSampler(const State& s, int i, const DrawTextures& stages, bool clamp, bool soft_border,
+                                bool skip_forced_aniso, uint32_t aniso) {
     D3D12_SAMPLER_DESC sd = {};
     const auto& t = s.tss[size_t(i)];
     uint32_t mag = t[kTssMagFilter];
@@ -1983,19 +1985,34 @@ D3D12_SAMPLER_DESC StageSampler(const State& s, int i, const DrawTextures& stage
     bool anisotropic = min == kTexfAnisotropic || mag == kTexfAnisotropic;
     uint32_t an = anisotropic ? std::max<uint32_t>(t[kTssMaxAnisotropy], 1) : 1;
     // forced only where the title filters across mip levels and the texture has them
-    if (aniso && lin(min) && mip && stages.sv[i].Texture2D.MipLevels > 1 && !stages.info[i].shadow) an = aniso;
+    // soft additive lights: forced aniso hardens circular / volume falloff into a ground square
+    if (aniso && !skip_forced_aniso && lin(min) && mip && stages.sv[i].Texture2D.MipLevels > 1 &&
+        !stages.info[i].shadow)
+        an = aniso;
     if (an > 1) {
         sd.Filter = D3D12_FILTER_ANISOTROPIC;
         sd.MaxAnisotropy = std::min<uint32_t>(an, 16);
     }
-    // clamp: the draw's coordinates all lie in 0..1 (UnitTexcoords), so wrap is read as clamp
-    sd.AddressU = Address(clamp && t[kTssAddressU] == kTaddressWrap ? kTaddressClamp : t[kTssAddressU]);
-    sd.AddressV = Address(clamp && t[kTssAddressV] == kTaddressWrap ? kTaddressClamp : t[kTssAddressV]);
+    bool wrap_u = t[kTssAddressU] == kTaddressWrap;
+    bool wrap_v = t[kTssAddressV] == kTaddressWrap;
+    // soft light volume cookie: UVs leave 0..1 for falloff; WRAP tiles the bright texel into a hard square
+    if (soft_border && (wrap_u || wrap_v)) {
+        sd.AddressU = sd.AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+        sd.BorderColor[0] = sd.BorderColor[1] = sd.BorderColor[2] = sd.BorderColor[3] = 0.0f;
+        if (an > 1) {
+            sd.Filter = D3D12_FILTER(fmin << 4 | fmag << 2 | fmip);
+            sd.MaxAnisotropy = 0;
+        }
+    } else {
+        // clamp: the draw's coordinates all lie in 0..1 (UnitTexcoords), so wrap is read as clamp
+        sd.AddressU = Address(clamp && wrap_u ? kTaddressClamp : t[kTssAddressU]);
+        sd.AddressV = Address(clamp && wrap_v ? kTaddressClamp : t[kTssAddressV]);
+        Color(t[kTssBorderColor], sd.BorderColor);
+    }
     sd.AddressW = Address(t[kTssAddressW]);
     sd.MipLODBias = Bits(t[kTssMipLodBias]);
     sd.MinLOD = float(t[kTssMaxMipLevel]);
     sd.MaxLOD = mip ? D3D12_FLOAT32_MAX : sd.MinLOD;
-    Color(t[kTssBorderColor], sd.BorderColor);
     if (stages.info[i].shadow) {
         // the console tests texel OP r, D3D12 tests r OP texel; with both reversed (g_reversed_depth) it is the same OP
         sd.Filter = lin(min) || lin(mag) ? D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT
@@ -2006,10 +2023,11 @@ D3D12_SAMPLER_DESC StageSampler(const State& s, int i, const DrawTextures& stage
     return sd;
 }
 
-uint32_t D3D12Backend::EnsureStageSamplers(const State& s, const DrawTextures& stages, bool clamp) {
+uint32_t D3D12Backend::EnsureStageSamplers(const State& s, const DrawTextures& stages, bool clamp, bool soft_border,
+                                           bool skip_forced_aniso) {
     D3D12_SAMPLER_DESC sd[4];
     uint32_t aniso = app::Get().aniso;
-    for (int i = 0; i < 4; i++) sd[i] = StageSampler(s, i, stages, clamp, aniso);
+    for (int i = 0; i < 4; i++) sd[i] = StageSampler(s, i, stages, clamp, soft_border, skip_forced_aniso, aniso);
     uint64_t key = Hash(sd, sizeof(sd));
     auto it = samplers_.find(key);
     if (it != samplers_.end()) return it->second;
@@ -2034,9 +2052,11 @@ DrawShaders ClassifyShaders(const State& s, const Assembled& a, uint32_t count) 
     DrawShaders sh;
     // a shader made from a declaration alone (no program) is the fixed function pipeline on those inputs
     sh.prog = (s.vs_handle & 1) && s.vs && !s.vs->program.empty();
-    // up to a quad with no depth test: it may be a pass over the whole target, see QuadHlsl; points never are
+    // Fullscreen / stretch passes are screen-space (XYZRHW) with Z off — see QuadHlsl.
+    // Soft light billboards are the same size (≤6 verts, Z off) but world-space; treating them as
+    // Quads runs unstretch() on a tiny sprite and hardens the falloff into a hard square (tutorial glow).
     bool points = a.topology == Topology::Points;
-    sh.quad = count <= kQuadVertices && !s.rs[kRsZEnable] && !points;
+    sh.quad = count <= kQuadVertices && !s.rs[kRsZEnable] && !points && a.pretransformed;
     sh.fixed_transform = !sh.prog && !a.pretransformed;
     sh.sprite = points && sh.prog && s.rs[kRsPointSpriteEnable];
     if (!sh.prog) sh.fk = MakeFixedKey(s);
@@ -2603,6 +2623,38 @@ uint32_t D3D12Backend::EnsureViewSet(const DrawTextures& stages) {
     return slot;
 }
 
+// Soft / alpha lights. Tutorial diag logged src=302 dst=303 (SRCALPHA/INVSRCALPHA), not additive —
+// the earlier additive-only filter never matched the ground cookie.
+bool SoftLightBlend(const State& s) {
+    if (!SimpleState(s, kMBlendEnable)) return false;
+    uint32_t src = SimpleState(s, kMSrcBlend), dst = SimpleState(s, kMDestBlend);
+    bool src_ok = src == 1 || src == 0x300 || src == 0x302;              // ONE / SRCCOLOR / SRCALPHA
+    bool dst_ok = dst == 1 || dst == 0 || dst == 0x301 || dst == 0x303;  // ONE / ZERO / INVSRC*
+    return src_ok && dst_ok;
+}
+
+// Small blended cookie (tutorial ground square): ≤24 verts, no Z-write, WRAP, UV outside 0..1.
+// Require !UnitTexcoords so character billboards (Rembrandt) stay untouched.
+bool SoftLightVolume(const State& s, const Assembled& a) {
+    if (!SoftLightBlend(s)) return false;
+    if (!a.vertex_count || a.vertex_count > 24) return false;
+    if (SimpleState(s, kMZWriteEnable)) return false;
+    if (!AnyStageWraps(s) || UnitTexcoords(a)) return false;
+    return true;
+}
+
+// CAMERASPACEPOSITION / projected TTFF on world meshes.
+bool SoftLightProjected(const State& s) {
+    if (!SoftLightBlend(s)) return false;
+    for (int t = 0; t < 4; t++) {
+        uint32_t gen = (s.tss[size_t(t)][kTssTexCoordIndex] >> 16) & 7;
+        uint32_t ttf = s.tss[size_t(t)][kTssTextureTransformFlags];
+        if (gen == 2) return true;
+        if ((ttf & 0x100) && (ttf & 7)) return true;
+    }
+    return false;
+}
+
 // a stage without a texture gets a null view of its kind; the samplers read the views after
 void D3D12Backend::SetTextureViewsAndSamplers(const State& s, const Assembled& a, DrawTextures& stages) {
     for (int i = 0; i < 4; i++) {
@@ -2613,7 +2665,26 @@ void D3D12Backend::SetTextureViewsAndSamplers(const State& s, const Assembled& a
     uint32_t views = EnsureViewSet(stages);
     if (views != binds_.views) cl_->SetGraphicsRootDescriptorTable(2, Gpu(srv_heap_.Get(), views, srv_inc_));
     binds_.views = views;
-    uint32_t samplers = EnsureStageSamplers(s, stages, AnyStageWraps(s) && UnitTexcoords(a));
+    bool unit = UnitTexcoords(a);
+    bool soft_blend = SoftLightBlend(s);
+    bool soft_vol = SoftLightVolume(s, a);
+    bool soft_proj = SoftLightProjected(s);
+    // Border on WRAP cookies with UVs outside 0..1 — never UnitTexcoords+border (hid Rembrandt).
+    bool soft_border = (soft_vol || soft_proj) && AnyStageWraps(s) && !unit;
+    bool clamp = soft_border || (AnyStageWraps(s) && unit);
+    // Cap early spam; keep a rolling counter so tutorial soft draws still show up in the log.
+    static int soft_logs = 0;
+    static int soft_total = 0;
+    if (soft_vol || soft_proj) {
+        soft_total++;
+        if (soft_logs < 24 || (soft_total % 120) == 0) {
+            LOGR("softlight hit: vol=%d proj=%d verts=%u wrap=%d unit=%d border=%d src=%X dst=%X total=%d",
+                 soft_vol ? 1 : 0, soft_proj ? 1 : 0, a.vertex_count, AnyStageWraps(s) ? 1 : 0, unit ? 1 : 0,
+                 soft_border ? 1 : 0, SimpleState(s, kMSrcBlend), SimpleState(s, kMDestBlend), soft_total);
+            soft_logs++;
+        }
+    }
+    uint32_t samplers = EnsureStageSamplers(s, stages, clamp, soft_border, soft_vol || soft_proj);
     if (samplers != binds_.samplers) cl_->SetGraphicsRootDescriptorTable(3, Gpu(smp_heap_.Get(), samplers, smp_inc_));
     binds_.samplers = samplers;
 }
@@ -2832,6 +2903,8 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     if (!BindStageTexturesAndTargets(s, stages)) return;
     PixelKey pk = MakePixelKey(s, stages.info);
     pk.quad = sh.quad;
+    // Soft cookie quads / projected lights: UV radial falloff softens the hard ground plate.
+    if (SoftLightVolume(s, a) || SoftLightProjected(s)) pk.soft_cookie = 1;
     sh.pkey = Hash(&pk, sizeof(pk));
     EnsurePixelShader(pk, sh);
     if (!sh.vs_code || !sh.ps_code) return;

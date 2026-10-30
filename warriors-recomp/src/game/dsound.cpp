@@ -142,14 +142,22 @@ X86_FUNC(sub_003ABF45) {
     Done(ctx);
 }
 
-// PlayEx / PauseEx → ignore timed variants
+// PlayEx(this, tLow, tHigh, flags) — same stack as Play; timestamps ignored (play now).
+// Ignoring PlayEx/PauseEx left intro/XACT voices running into the tutorial ("wrong" audio).
+X86_EXTERN_FUNC(__imp__sub_003A9EA0);  // IDirectSoundBuffer_Play
 X86_FUNC(sub_003A9EC4) {
-    (void)base;
-    Ignore<4>(ctx);
+    __imp__sub_003A9EA0(ctx, base);
 }
+
+// PauseEx(this, tLow, tHigh, flags) → Pause(this, flags) immediately
+X86_EXTERN_FUNC(__imp__sub_003A9F24);  // IDirectSoundBuffer_Pause
 X86_FUNC(sub_003A9F40) {
-    (void)base;
-    Ignore<4>(ctx);
+    uint32_t ret = R32(ctx.esp), thiz = R32(ctx.esp + 4), flags = R32(ctx.esp + 16);
+    ctx.esp += 20;
+    X86_PUSH32(flags);
+    X86_PUSH32(thiz);
+    X86_PUSH32(ret);
+    __imp__sub_003A9F24(ctx, base);
 }
 
 X86_FUNC(sub_003AA00C) {

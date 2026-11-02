@@ -7,7 +7,6 @@
 | Role | Who |
 |------|-----|
 | Author / maintainer | [Matteo Santoro](https://github.com/Matt-code-d) ([Matt-code-d](https://github.com/Matt-code-d)) |
-| Contact | matteosdesign@gmail.com |
 | Repository | https://github.com/Matt-code-d/TheWarriorsRecomp |
 
 ## Upstream & tools

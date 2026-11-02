@@ -26,7 +26,7 @@ This tree targets the **EUR** disc (PAL movies under `bik_pal`, five language pa
 
 ## License (read this)
 
-See **[LICENSE](LICENSE)** and the short map in **[LICENSES.md](LICENSES.md)**. Credits / who built what: **[CONTRIBUTIONS.md](CONTRIBUTIONS.md)**.
+See **[LICENSE](LICENSE)** and the short map in **[LICENSES.md](LICENSES.md)**. Credits / who built what: **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 - **MIT** covers **only** original work in this repository (launcher, EUR host patches, docs, configs authored here).
 - It does **not** grant rights to **The Warriors** game data (ISO / XBE / WAD / Bink / audio). Those stay with Rockstar / Take-Two / related rights holders.
@@ -150,7 +150,7 @@ Planned (not in this alpha yet):
 
 ## Credits
 
-Full list: **[CONTRIBUTIONS.md](CONTRIBUTIONS.md)**.
+Full list: **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 - [TGP482/XboxXBERecomp](https://github.com/TGP482/XboxXBERecomp) — recompiler / runtime SDK  
 

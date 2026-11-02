@@ -3,6 +3,9 @@
 **/default.xbe
 **/assets/
 !warriors-recomp/assets/.gitkeep
+# Launcher UI images (not game dumps)
+!warriors-recomp/launcher/Assets/
+!warriors-recomp/launcher/Assets/**
 
 # Build trees
 **/out/

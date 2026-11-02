@@ -48,5 +48,14 @@ std::recursive_mutex& UiLock() {
 }
 
 void Pace() {}
+uint32_t TargetDisplayHz() { return kGuestRefreshHz; }
+float FrameTimeScale() { return 1.f; }
+float MeasuredFrameDt() { return 0.f; }
+uint32_t DisplayFrameUs() { return GuestVBlankUs(); }
+std::chrono::steady_clock::time_point FrameEpoch() { return std::chrono::steady_clock::now(); }
+void FrameClockWaitGuest() {}
+void NoteBlockUntilVBlank() {}
+void NotePresentedFrame() {}
+bool PresentUseVsync() { return false; }
 
 }  // namespace app

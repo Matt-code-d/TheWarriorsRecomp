@@ -10,6 +10,7 @@
 #include <timeapi.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cwchar>
@@ -199,6 +200,8 @@ void OpenGameWindow(bool apply) { SendMessageW(g_hwnd, kOpenWindow, apply, 0); }
 
 namespace {
 
+using Clock = std::chrono::steady_clock;
+
 // the game window's monitor's refresh rate, read again each second (a mode change, a move to another monitor); 0
 // when unreadable
 uint32_t RefreshRate() {
@@ -218,32 +221,118 @@ uint32_t RefreshRate() {
     return rate;
 }
 
+// One epoch for guest VBlank + Pace while sim is still locked to PAL 50 Hz.
+const Clock::time_point g_frame_epoch = Clock::now();
+std::atomic<uint64_t> g_guest_frame{0};
+std::atomic<uint64_t> g_present_frame{0};
+std::atomic<uint64_t> g_block_vb{0};
+std::atomic<uint64_t> g_presents{0};
+std::atomic<uint64_t> g_last_present_ns{0};
+std::atomic<float> g_measured_dt{0.f};
+
+std::chrono::nanoseconds HzPeriod(uint32_t hz) {
+    if (!hz) hz = kGuestRefreshHz;
+    return std::chrono::nanoseconds(1000000000ull / hz);
+}
+
+void WaitUntil(Clock::time_point target) {
+    for (;;) {
+        auto left = target - Clock::now();
+        if (left <= std::chrono::nanoseconds(0)) break;
+        if (left > std::chrono::milliseconds(2)) Sleep(1);
+        else std::this_thread::yield();
+    }
+}
+
+void LogTimingStats() {
+    static Clock::time_point next = Clock::now() + std::chrono::seconds(5);
+    static uint64_t prev_p = 0, prev_b = 0;
+    auto now = Clock::now();
+    if (now < next) return;
+    next = now + std::chrono::seconds(5);
+    uint64_t p = g_presents.load(std::memory_order_relaxed);
+    uint64_t b = g_block_vb.load(std::memory_order_relaxed);
+    double sec = 5.0;
+    LOGR("timing: present=%.1f Hz block_vb=%.1f Hz scale=%.3f target=%u guest=%u vsync_present=%d refresh=%u",
+         (p - prev_p) / sec, (b - prev_b) / sec, FrameTimeScale(), TargetDisplayHz(), kGuestRefreshHz,
+         PresentUseVsync() ? 1 : 0, RefreshRate());
+    prev_p = p;
+    prev_b = b;
+}
+
 }  // namespace
 
-void Pace() {
-    using clock = std::chrono::steady_clock;
-    static clock::time_point next = clock::now();
+uint32_t TargetDisplayHz() {
     uint32_t cap = Get().fps_cap;
     if (cap == kFpsCapRefresh) cap = RefreshRate();
-    auto now = clock::now();
-    if (!cap) {
-        next = now;
-        return;
+    if (cap == 0) {
+        // Uncapped: pace to the panel if known, else leave guest rate (hooks still see measured dt).
+        uint32_t ref = RefreshRate();
+        return ref > 1 ? ref : kGuestRefreshHz;
     }
-    // Present(1) already waits on the vertical blank. A software wait at or above the refresh
-    // rate stacks a second limiter after that and reads as hitchy ("hitting FPS but not smooth").
-    if (Get().vsync) {
-        uint32_t hz = RefreshRate();
-        if (!hz || cap >= hz) {
-            next = now;
-            return;
-        }
+    if (cap > 240) cap = 240;
+    return cap;
+}
+
+float FrameTimeScale() {
+    uint32_t disp = TargetDisplayHz();
+    if (!disp || disp <= kGuestRefreshHz) return 1.f;
+    return float(kGuestRefreshHz) / float(disp);
+}
+
+float MeasuredFrameDt() { return g_measured_dt.load(std::memory_order_relaxed); }
+
+uint32_t DisplayFrameUs() {
+    uint32_t hz = TargetDisplayHz();
+    if (!hz) hz = kGuestRefreshHz;
+    return 1000000u / hz;
+}
+
+Clock::time_point FrameEpoch() { return g_frame_epoch; }
+
+void FrameClockWaitGuest() {
+    uint64_t i = g_guest_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+    WaitUntil(g_frame_epoch + HzPeriod(TargetDisplayHz()) * i);
+}
+
+void NoteBlockUntilVBlank() { g_block_vb.fetch_add(1, std::memory_order_relaxed); }
+
+void NotePresentedFrame() {
+    using namespace std::chrono;
+    auto now = Clock::now();
+    uint64_t ns = uint64_t(duration_cast<nanoseconds>(now.time_since_epoch()).count());
+    uint64_t prev = g_last_present_ns.exchange(ns, std::memory_order_relaxed);
+    if (prev) {
+        float dt = float(ns - prev) * 1e-9f;
+        if (dt > 0.f && dt < 0.25f) g_measured_dt.store(dt, std::memory_order_relaxed);
     }
-    auto period = std::chrono::nanoseconds(1000000000ull / cap);
-    next += period;
-    if (next < now - period) next = now;
-    while (clock::now() + std::chrono::milliseconds(2) < next) Sleep(1);
-    while (clock::now() < next) std::this_thread::yield();
+    g_presents.fetch_add(1, std::memory_order_relaxed);
+    LogTimingStats();
+}
+
+bool PresentUseVsync() {
+    if (!Get().vsync) return false;
+    uint32_t target = TargetDisplayHz();
+    uint32_t ref = RefreshRate();
+    // VSync only when the panel divides the target evenly — else Present(1) on e.g. 164 Hz fights Pace@50.
+    return ref && target && (ref % target) == 0;
+}
+
+void Pace() {
+    uint32_t hz = TargetDisplayHz();
+    uint64_t i = g_present_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+    auto period = HzPeriod(hz);
+    auto target = g_frame_epoch + period * i;
+    auto now = Clock::now();
+    // If we fell more than one frame behind (hitch), resync without catch-up bursts.
+    if (target < now - period) {
+        uint64_t catchup = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(now - g_frame_epoch).count() /
+                                    period.count()) +
+                           1;
+        g_present_frame.store(catchup, std::memory_order_relaxed);
+        target = g_frame_epoch + period * catchup;
+    }
+    WaitUntil(target);
 }
 
 }  // namespace app

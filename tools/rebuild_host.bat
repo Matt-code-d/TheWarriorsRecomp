@@ -16,6 +16,9 @@ cmake --build out\build\release --target Warriors Warriors_code -j 32
 if errorlevel 1 exit /b 1
 rem Keep built.txt stamp in sync (EXE size+mtime+XBE sha1) so PLAY does not recompile the game DLL.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0sync_game_stamp.ps1"
+echo === publish FSR 1.0 shaders beside EXE ===
+if not exist out\build\release\fsr mkdir out\build\release\fsr
+copy /Y sdk\runtime\gpu\fsr\*.* out\build\release\fsr\ >nul
 echo === publish launcher beside EXE + into port\ ===
 dotnet build launcher\WarriorsLauncher.csproj -c Release -o out\build\release
 if errorlevel 1 exit /b 1
@@ -24,6 +27,8 @@ if exist ..\port (
   copy /Y out\build\release\WarriorsLauncher.dll ..\port\ >nul
   copy /Y out\build\release\WarriorsLauncher.deps.json ..\port\ >nul
   copy /Y out\build\release\WarriorsLauncher.runtimeconfig.json ..\port\ >nul
+  if not exist ..\port\fsr mkdir ..\port\fsr
+  copy /Y out\build\release\fsr\*.* ..\port\fsr\ >nul
 )
 echo === done ===
 dir out\build\release\Warriors.exe out\build\release\Warriors.dll out\build\release\WarriorsLauncher.exe

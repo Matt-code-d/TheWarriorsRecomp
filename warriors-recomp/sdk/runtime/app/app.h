@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
@@ -20,8 +21,13 @@ struct Settings {
     DisplayMode display_mode = DisplayMode::Borderless;
     uint32_t width = 0, height = 0;  // 0 is the desktop mode
     uint32_t render_percent = 100;   // of the output height
-    uint32_t fps_cap = 60;           // 0 unlimited, kFpsCapRefresh the monitor's refresh rate
+    // EUR PAL content is 50 Hz. Default 50 — 60 makes the whole game ~20% fast (VBlank/logic).
+    // 0 = unlimited (also accelerates), kFpsCapRefresh = monitor Hz.
+    uint32_t fps_cap = 50;
     bool vsync = true;
+    // FSR 1.0 present upscale: 0 off, 1 ultra quality, 2 quality, 3 balanced, 4 performance.
+    // When on, BlitFrame uses EASU+RCAS instead of bilinear (pair with render_percent < 100).
+    uint32_t fsr = 0;
     uint32_t aniso = 0;              // 0 as the game asks
     bool custom_textures = true;     // images in textures\replacement\ beside the exe replace the game's
     bool dump_textures = false;      // each texture once into textures\dumps\ beside the exe
@@ -43,6 +49,26 @@ Mode Output();
 float RenderScale(uint32_t guest_height);
 // the output is 3:2 or wider: the console reports a widescreen TV and the frame is shown 16:9, else 4:3 as on a 4:3 TV
 bool Widescreen();
+// EUR Warriors is PAL-I: guest VBlank / game clock is 50 Hz (not 60). Faster clocks accelerate gameplay
+// until sim is decoupled from present rate (see FrameTimeScale / roadmap).
+inline constexpr uint32_t kGuestRefreshHz = 50;
+inline constexpr uint32_t GuestVBlankUs() { return 1000000u / kGuestRefreshHz; }
+
+// Display target Hz from settings (0 → uncapped / monitor; may exceed guest when dt hooks active).
+uint32_t TargetDisplayHz();
+// guest_hz / display_hz — 1 at PAL 50; <1 when presenting faster (fixed-step scale).
+float FrameTimeScale();
+// Last Swap period in seconds (0 until two presents); used to feed real dt when unlocked.
+float MeasuredFrameDt();
+// Shared frame epoch: VBlank + Pace phase-lock (both follow TargetDisplayHz).
+std::chrono::steady_clock::time_point FrameEpoch();
+void FrameClockWaitGuest();   // VerticalBlank thread: next blank (display-timed)
+void NoteBlockUntilVBlank();  // stats: title waited on VB
+void NotePresentedFrame();    // stats + measured dt
+// Prefer Present(0)+Pace when monitor Hz does not divide evenly by the target (e.g. 50 on 164).
+bool PresentUseVsync();
+// Microseconds for one display frame (BlockUntil / raster); follows TargetDisplayHz.
+uint32_t DisplayFrameUs();
 
 std::filesystem::path ExeDir();
 // the game in assets (game_files.cpp): its folder and this executable's xbe, from the extracted files or a disc
@@ -101,7 +127,7 @@ struct GameInfo {
 };
 extern const GameInfo kGame;
 
-// sleeps out the rest of the frame for the fps cap
+// waits out the rest of the display frame (same epoch as guest VBlank while locked to 50)
 void Pace();
 
 }  // namespace app

@@ -55,6 +55,7 @@ const char* kCommonTail = R"(    float4 spread[4];
     float4 lt[56];
     float4 rtshift;
     float4 zparams;
+    float4 softcen;
 };
 )";
 
@@ -944,16 +945,18 @@ std::string PixelHlsl(const PixelKey& k) {
         body += "float4 outc = float4(lerp(fogin.rgb, cur.rgb, fogin.a), cur.a);\n";
     }
     if (k.alphatest) body += "alphatest(outc.a);\n";
-    // Soft light cookie quads: title falloff is lost (wrap/aniso/opaque cookie) → hard ground square.
-    // Radial mask in UV space restores a soft circle without touching other draws.
-    // DO NOT multiply outc.a by falloff — that re-broke Rembrandt/Coney Island into a hard lit box.
-    if (k.soft_cookie) {
+    // Soft light Volume (=1 RGB / =2 RGB+alpha): radial about softcen AABB.
+    // SoftLightScreen soft_cookie=3 FAILED: UV radial = useless vignette; 9-tap blur ghosted whole frame
+    // including HUD (2026-10-30). Do not reapply Screen cookie/blur.
+    if (k.soft_cookie && k.soft_cookie < 3) {
         body += "{\n";
         body += "    float2 _sc = tc0.w != 0 && abs(tc0.w) > 1e-5 ? tc0.xy / tc0.w : tc0.xy;\n";
-        body += "    float2 _sd = _sc - 0.5;\n";
-        body += "    float _sf = saturate(1.0 - 4.0 * dot(_sd, _sd));\n";
+        body += "    float2 _ext = max(softcen.zw, float2(1e-3, 1e-3));\n";
+        body += "    float2 _sd = (_sc - softcen.xy) / _ext;\n";
+        body += "    float _sf = saturate(1.0 - dot(_sd, _sd));\n";
         body += "    _sf *= _sf;\n";
         body += "    outc.rgb *= _sf;\n";
+        if (k.soft_cookie >= 2) body += "    outc.a *= _sf;\n";
         body += "}\n";
     }
     body += Hooks().Output() + "return outc;\n}\n";

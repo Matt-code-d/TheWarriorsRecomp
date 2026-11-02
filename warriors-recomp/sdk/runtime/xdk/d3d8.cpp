@@ -313,14 +313,14 @@ void SetFrameBuffers(const char* caller, uint32_t pp) {
 constexpr bool kVBlank = XDK_CDevice_VBlankCount != xdk::kUnknown && XDK_CDevice_VBlankEvent != xdk::kUnknown &&
                          XDK_CDevice_VBlankCallback != xdk::kUnknown;
 
-// what the library's vertical blank interrupt leaves for the title: count, event, callback
+// what the library's vertical blank interrupt leaves for the title: count, event, callback.
+// EUR PAL-I: 50 Hz, phase-locked to Pace via FrameClockWaitGuest (same epoch).
 void VerticalBlank(X86Context& ctx) {
-    using clock = std::chrono::steady_clock;
     uint32_t info = mem::AllocSystem(12), shown = 0;
-    auto next = clock::now();
+    LOGR("d3d: VBlank display=%u Hz (PAL sim %u, scale=%.3f), epoch locked with Pace", app::TargetDisplayHz(),
+         app::kGuestRefreshHz, app::FrameTimeScale());
     for (;;) {
-        next = std::max(next + std::chrono::microseconds(16667), clock::now());
-        std::this_thread::sleep_until(next);
+        app::FrameClockWaitGuest();
         uint32_t count = Dev(XDK_CDevice_VBlankCount) + 1, swaps = Dev(kDevSwapCount);
         SetDev(XDK_CDevice_VBlankCount, count);
         ObjectRef event = FromPointer(kDevice + XDK_CDevice_VBlankEvent);
@@ -369,7 +369,7 @@ HLE_STDCALL(Direct3D_CreateDevice, 6) {
     gpu::MarkAllSimple();
     gpu::g_simple_tracked = true;
     SetFrameBuffers("CreateDevice", a[4]);
-    // 60 Hz, widescreen
+    // PAL 50 Hz path + widescreen when the desktop is wide
     if (XDK_CDevice_DisplayFlags != xdk::kUnknown) SetDev(XDK_CDevice_DisplayFlags, 0x400000 | (app::Widescreen() ? 0x10000 : 0));
     // the miniport's hardware init leaves an identity ramp in slot 0, which GetGammaRamp reads until one is set
     if (XDK_CDevice_GammaRamps != xdk::kUnknown) {
@@ -494,13 +494,21 @@ HLE_STDCALL(D3D_MakeRequestedSpace, 2) {
 }
 
 HLE_STDCALL(D3DDevice_BlockUntilVerticalBlank, 0) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    // Wait for the next blank (display-timed; dt hooks keep PAL game speed above 50 Hz).
+    app::NoteBlockUntilVBlank();
+    if (kVBlank) {
+        ObjectRef event = FromPointer(kDevice + XDK_CDevice_VBlankEvent);
+        // relative timeout in 100 ns units: one display frame
+        int64_t timeout = -int64_t(app::DisplayFrameUs()) * 10;
+        Wait({event}, false, timeout, false);
+    } else {
+        std::this_thread::sleep_for(std::chrono::microseconds(app::DisplayFrameUs()));
+    }
     return 0;
 }
-// (status): D3DRASTER_STATUS {InVBlank, ScanLine} on a 60 Hz frame clock. The library reads the GPU's scanline,
-// which counts the front buffer's lines, then the blank: 45 lines per 480 shown, as on NTSC.
+// (status): D3DRASTER_STATUS {InVBlank, ScanLine} on the display frame clock.
 HLE_STDCALL(D3DDevice_GetRasterStatus, 1) {
-    constexpr int64_t kFrameMicroseconds = 16667;
+    const int64_t kFrameMicroseconds = int64_t(app::DisplayFrameUs());
     constexpr uint32_t kBlankLines = 45;
     constexpr uint32_t kShownLines = 480;
     uint32_t shown = g_buffers[0] ? (R32(g_buffers[0] + 0x10) >> 12 & 0xFFF) + 1 : kShownLines;
@@ -626,6 +634,7 @@ HLE_STDCALL(D3DDevice_Swap, 1) {
     Walk(Dev(kDevPush));  // reports asked for at the end of the frame
     if (g_backend) g_backend->Present(SurfaceOf(g_buffers[1]));
     app::Pace();
+    app::NotePresentedFrame();
     // like the XDK, the surfaces stay put and their memory rotates: titles keep back buffer pointers and copy its data
     uint32_t last = g_buffers[g_buffer_count - 1], data = R32(last + 4), lk = R32(last + 8);
     for (uint32_t i = g_buffer_count - 1; i > 0; i--) {

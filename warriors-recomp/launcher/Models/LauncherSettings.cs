@@ -31,13 +31,16 @@ public sealed class LauncherSettings
     /// <summary>0 = use desktop resolution.</summary>
     public uint Height { get; set; }
 
-    /// <summary>0 unlimited, 1 = monitor refresh, else target FPS.</summary>
-    public uint FpsCap { get; set; } = 60;
+    /// <summary>0 unlimited, 1 monitor refresh, else target FPS (PAL base 50; host scales dt above 50).</summary>
+    public uint FpsCap { get; set; } = 50;
 
     public bool VSync { get; set; } = true;
 
     /// <summary>Render scale percent of output height (25–200).</summary>
     public uint RenderPercent { get; set; } = 100;
+
+    /// <summary>0 off, 1 ultra quality, 2 quality, 3 balanced, 4 performance (FSR 1.0).</summary>
+    public uint Fsr { get; set; }
 
     /// <summary>0 = as the game asks.</summary>
     public uint Anisotropic { get; set; }

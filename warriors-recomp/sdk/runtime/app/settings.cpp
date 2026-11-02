@@ -48,7 +48,10 @@ void Load() {
     s.height = t["height"].value_or(s.height);
     s.render_percent = t["render_percent"].value_or(s.render_percent);
     s.fps_cap = t["fps_cap"].value_or(s.fps_cap);
+    // 0 = uncapped, 1 = monitor refresh, else clamp to a sane cap (dt hooks keep PAL speed).
+    if (s.fps_cap > 240 && s.fps_cap != kFpsCapRefresh) s.fps_cap = 240;
     s.vsync = t["vsync"].value_or(s.vsync);
+    s.fsr = std::min(t["fsr"].value_or(s.fsr), 4u);
     s.aniso = t["anisotropic_filtering"].value_or(s.aniso);
     s.custom_textures = t["custom_textures"].value_or(s.custom_textures);
     s.dump_textures = t["dump_textures"].value_or(s.dump_textures);
@@ -71,6 +74,7 @@ toml::table Table() {
                   {"render_percent", int64_t(s.render_percent)},
                   {"fps_cap", int64_t(s.fps_cap)},
                   {"vsync", s.vsync},
+                  {"fsr", int64_t(s.fsr)},
                   {"anisotropic_filtering", int64_t(s.aniso)},
                   {"custom_textures", s.custom_textures},
                   {"dump_textures", s.dump_textures},

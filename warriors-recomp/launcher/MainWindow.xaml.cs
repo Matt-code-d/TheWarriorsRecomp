@@ -85,6 +85,7 @@ public partial class MainWindow : Window
         LblResolution.Text = t.Resolution;
         LblFpsCap.Text = t.FpsCap;
         LblRenderScale.Text = t.RenderScale;
+        LblFsr.Text = t.Fsr;
         LblAniso.Text = t.Aniso;
         ChkVSync.Content = t.VSync;
         ChkCustomTex.Content = t.CustomTex;
@@ -118,25 +119,39 @@ public partial class MainWindow : Window
             new ComboOpt("2560 × 1440", "2560x1440"),
             new ComboOpt("3840 × 2160", "3840x2160"),
         };
+        // PAL guest is 50 Hz; host dt hooks keep game speed when display > 50.
         CmbFps.ItemsSource = new[]
         {
-            new ComboOpt("Unlimited", "0"),
-            new ComboOpt("Monitor refresh", "1"),
+            new ComboOpt("25", "25"),
             new ComboOpt("30", "30"),
+            new ComboOpt("50 (PAL)", "50"),
             new ComboOpt("60", "60"),
             new ComboOpt("120", "120"),
             new ComboOpt("144", "144"),
             new ComboOpt("165", "165"),
             new ComboOpt("240", "240"),
+            new ComboOpt("Monitor refresh", "1"),
+            new ComboOpt("Unlimited", "0"),
         };
         CmbRenderScale.ItemsSource = new[]
         {
             new ComboOpt("50%", "50"),
+            new ComboOpt("59% (FSR Balanced)", "59"),
+            new ComboOpt("67% (FSR Quality)", "67"),
             new ComboOpt("75%", "75"),
+            new ComboOpt("77% (FSR Ultra)", "77"),
             new ComboOpt("100%", "100"),
             new ComboOpt("125%", "125"),
             new ComboOpt("150%", "150"),
             new ComboOpt("200%", "200"),
+        };
+        CmbFsr.ItemsSource = new[]
+        {
+            new ComboOpt("Off", "0"),
+            new ComboOpt("Ultra Quality", "1"),
+            new ComboOpt("Quality", "2"),
+            new ComboOpt("Balanced", "3"),
+            new ComboOpt("Performance", "4"),
         };
         CmbAniso.ItemsSource = new[]
         {
@@ -153,8 +168,11 @@ public partial class MainWindow : Window
         SelectCombo(CmbApi, _settings.GraphicsApi);
         SelectCombo(CmbDisplayMode, _settings.DisplayMode);
         SelectCombo(CmbResolution, $"{_settings.Width}x{_settings.Height}");
+        if (_settings.FpsCap > 240 && _settings.FpsCap != 1)
+            _settings.FpsCap = 50;
         SelectCombo(CmbFps, _settings.FpsCap.ToString());
         SelectCombo(CmbRenderScale, _settings.RenderPercent.ToString());
+        SelectCombo(CmbFsr, _settings.Fsr.ToString());
         SelectCombo(CmbAniso, _settings.Anisotropic.ToString());
         ChkVSync.IsChecked = _settings.VSync;
         ChkCustomTex.IsChecked = _settings.CustomTextures;
@@ -192,9 +210,21 @@ public partial class MainWindow : Window
             }
         }
         if (CmbFps.SelectedItem is ComboOpt fps && uint.TryParse(fps.Value, out var cap))
-            _settings.FpsCap = cap;
+            _settings.FpsCap = cap > 240 && cap != 1 ? 50u : cap;
         if (CmbRenderScale.SelectedItem is ComboOpt scale && uint.TryParse(scale.Value, out var percent))
             _settings.RenderPercent = percent;
+        if (CmbFsr.SelectedItem is ComboOpt fsr && uint.TryParse(fsr.Value, out var fsrQ))
+        {
+            uint prev = _settings.Fsr;
+            _settings.Fsr = fsrQ;
+            // Picking a quality preset also snaps render scale to the matching internal resolution.
+            if (fsrQ != prev && fsrQ > 0)
+            {
+                uint suggested = fsrQ switch { 1 => 77u, 2 => 67u, 3 => 59u, 4 => 50u, _ => 100u };
+                _settings.RenderPercent = suggested;
+                SelectCombo(CmbRenderScale, suggested.ToString());
+            }
+        }
         if (CmbAniso.SelectedItem is ComboOpt an && uint.TryParse(an.Value, out var aniso))
             _settings.Anisotropic = aniso;
         _settings.VSync = ChkVSync.IsChecked == true;
@@ -217,7 +247,7 @@ public partial class MainWindow : Window
                 $"Will write display_mode={_settings.DisplayMode}, " +
                 $"{(_settings.Width == 0 ? "desktop" : $"{_settings.Width}x{_settings.Height}")}, " +
                 $"fps_cap={_settings.FpsCap}, vsync={_settings.VSync}, " +
-                $"render_percent={_settings.RenderPercent} → settings.toml";
+                $"render_percent={_settings.RenderPercent}, fsr={_settings.Fsr} → settings.toml";
         }
     }
 
@@ -243,9 +273,10 @@ public partial class MainWindow : Window
         _settings.DisplayMode = "borderless";
         _settings.Width = 0;
         _settings.Height = 0;
-        _settings.FpsCap = 60;
+        _settings.FpsCap = 50;
         _settings.VSync = true;
         _settings.RenderPercent = 100;
+        _settings.Fsr = 0;
         _settings.Anisotropic = 0;
         _settings.CustomTextures = true;
         _settings.GraphicsApi = "d3d12";

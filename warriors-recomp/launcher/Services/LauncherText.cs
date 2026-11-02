@@ -32,6 +32,7 @@ public static class LauncherText
         public string Resolution { get; init; } = "";
         public string FpsCap { get; init; } = "";
         public string RenderScale { get; init; } = "";
+        public string Fsr { get; init; } = "";
         public string Aniso { get; init; } = "";
         public string VSync { get; init; } = "";
         public string CustomTex { get; init; } = "";
@@ -95,6 +96,7 @@ public static class LauncherText
         Resolution = "RESOLUTION",
         FpsCap = "FPS CAP",
         RenderScale = "RENDER SCALE",
+        Fsr = "FSR 1.0",
         Aniso = "ANISOTROPIC FILTERING",
         VSync = "VSync",
         CustomTex = "Custom textures (textures\\replacement)",
@@ -139,6 +141,7 @@ public static class LauncherText
         Resolution = "RISOLUZIONE",
         FpsCap = "LIMITE FPS",
         RenderScale = "SCALA RENDER",
+        Fsr = "FSR 1.0",
         Aniso = "FILTRO ANISOTROPICO",
         VSync = "VSync",
         CustomTex = "Texture custom (textures\\replacement)",
@@ -183,6 +186,7 @@ public static class LauncherText
         Resolution = "AUFLÖSUNG",
         FpsCap = "FPS-LIMIT",
         RenderScale = "RENDER-SKALA",
+        Fsr = "FSR 1.0",
         Aniso = "ANISOTROPE FILTERUNG",
         VSync = "VSync",
         CustomTex = "Eigene Texturen (textures\\replacement)",
@@ -227,6 +231,7 @@ public static class LauncherText
         Resolution = "RÉSOLUTION",
         FpsCap = "LIMITE FPS",
         RenderScale = "ÉCHELLE DE RENDU",
+        Fsr = "FSR 1.0",
         Aniso = "FILTRAGE ANISOTROPIQUE",
         VSync = "VSync",
         CustomTex = "Textures custom (textures\\replacement)",
@@ -271,6 +276,7 @@ public static class LauncherText
         Resolution = "RESOLUCIÓN",
         FpsCap = "LÍMITE FPS",
         RenderScale = "ESCALA DE RENDER",
+        Fsr = "FSR 1.0",
         Aniso = "FILTRADO ANISOTRÓPICO",
         VSync = "VSync",
         CustomTex = "Texturas custom (textures\\replacement)",

@@ -23,6 +23,7 @@ public static class GameSettingsToml
         map["fps_cap"] = settings.FpsCap.ToString(CultureInfo.InvariantCulture);
         map["vsync"] = settings.VSync ? "true" : "false";
         map["render_percent"] = settings.RenderPercent.ToString(CultureInfo.InvariantCulture);
+        map["fsr"] = settings.Fsr.ToString(CultureInfo.InvariantCulture);
         map["anisotropic_filtering"] = settings.Anisotropic.ToString(CultureInfo.InvariantCulture);
         map["custom_textures"] = settings.CustomTextures ? "true" : "false";
         map["dump_textures"] = settings.DumpTextures ? "true" : "false";
@@ -53,11 +54,16 @@ public static class GameSettingsToml
         if (map.TryGetValue("height", out var h) && uint.TryParse(h, out var height))
             settings.Height = height;
         if (map.TryGetValue("fps_cap", out var fps) && uint.TryParse(fps, out var cap))
-            settings.FpsCap = cap;
+        {
+            // 0 unlimited, 1 monitor Hz, else clamp; host scales PAL fixed-step above 50.
+            settings.FpsCap = cap > 240 && cap != 1 ? 50u : cap;
+        }
         if (map.TryGetValue("vsync", out var vs))
             settings.VSync = vs is "true" or "1";
         if (map.TryGetValue("render_percent", out var rp) && uint.TryParse(rp, out var percent))
             settings.RenderPercent = Math.Clamp(percent, 25u, 200u);
+        if (map.TryGetValue("fsr", out var fsr) && uint.TryParse(fsr, out var fsrQ))
+            settings.Fsr = Math.Clamp(fsrQ, 0u, 4u);
         if (map.TryGetValue("anisotropic_filtering", out var an) && uint.TryParse(an, out var aniso))
             settings.Anisotropic = aniso;
         if (map.TryGetValue("custom_textures", out var ct))
@@ -96,7 +102,7 @@ public static class GameSettingsToml
         sb.AppendLine("# Written by WarriorsLauncher — host settings for Warriors.exe");
         foreach (var key in new[]
                  {
-                     "display_mode", "width", "height", "render_percent", "fps_cap", "vsync",
+                     "display_mode", "width", "height", "render_percent", "fps_cap", "vsync", "fsr",
                      "anisotropic_filtering", "custom_textures", "dump_textures", "texture_dump_format", "join_ip",
                  })
         {
@@ -105,7 +111,7 @@ public static class GameSettingsToml
         }
         foreach (var kv in root.OrderBy(k => k.Key, StringComparer.Ordinal))
         {
-            if (kv.Key is "display_mode" or "width" or "height" or "render_percent" or "fps_cap" or "vsync"
+            if (kv.Key is "display_mode" or "width" or "height" or "render_percent" or "fps_cap" or "vsync" or "fsr"
                 or "anisotropic_filtering" or "custom_textures" or "dump_textures" or "texture_dump_format"
                 or "join_ip")
                 continue;

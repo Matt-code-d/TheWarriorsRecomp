@@ -2,6 +2,7 @@
 
 namespace warriors {
 void StartApuClock();
+void TimingTouch();
 }
 
 // EUR retail — APU sample clock required before XACT touches FE80200C.
@@ -18,7 +19,11 @@ const app::GameInfo app::kGame = {
     .load = nullptr,
     .save = nullptr,
     .init = nullptr,
-    .loaded = warriors::StartApuClock,
+    .loaded =
+        [] {
+            warriors::StartApuClock();
+            warriors::TimingTouch();
+        },
     .window = nullptr,
     .message = nullptr,
     .ui = nullptr,

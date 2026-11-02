@@ -34,6 +34,7 @@
 #include "core/log.h"
 #include "gpu/backend.h"
 #include "gpu/ext.h"
+#include "gpu/fsr_con.h"
 #include "gpu/shaders.h"
 #include "gpu/texture.h"
 #include "gpu/texturedumper.h"
@@ -616,7 +617,11 @@ private:
     void ResizeSwap();
     void UploadGammaRamp();
     void DrawFrame(Target* t, uint32_t bi);
-    void BlitFrame(Target& t);
+    void BlitFrame(Target& t, uint32_t bi);
+    void BlitFrameFsr(Target& t, uint32_t bi, float vw, float vh, float vp_x, float vp_y);
+    bool EnsureFsrTarget(uint32_t w, uint32_t h);
+    ID3D12PipelineState* EnsureFsrPipeline(const wchar_t* file, const char* entry);
+    ID3DBlob* CompileFsrFile(const wchar_t* file, const char* entry, const char* profile, uint64_t& hash);
     void RenderUi();
     void ReleaseOldTextures();
     void ResetFrame();
@@ -699,6 +704,7 @@ private:
     ComPtr<ID3D12Resource> bb_[kFrames];
     ComPtr<ID3D12Fence> fence_;
     HANDLE event_ = nullptr;
+    HANDLE frame_wait_ = nullptr;  // DXGI frame-latency waitable; do not CloseHandle
     uint64_t fence_value_ = 0;
     Frame frames_[kFrames];
     uint64_t frame_ = 0;
@@ -758,6 +764,12 @@ private:
     uint8_t ramp_[768] = {};
     bool ramp_dirty_ = false;
     bool gamma_ = false;
+    // FSR1 EASU intermediate (letterboxed viewport size), then RCAS onto the swap chain
+    ComPtr<ID3D12Resource> fsr_easu_;
+    D3D12_RESOURCE_STATES fsr_easu_state_ = D3D12_RESOURCE_STATE_COMMON;
+    uint32_t fsr_easu_w_ = 0, fsr_easu_h_ = 0;
+    uint32_t fsr_rtv_slot_ = UINT32_MAX;
+    ComPtr<ID3D12PipelineState> fsr_easu_pso_, fsr_rcas_pso_;
     Target* bound_rt_ = nullptr;
     Target* bound_ds_ = nullptr;
     Target* draw_rt_ = nullptr;  // the draw's targets, the bound ones go when a texture's copy is drawn
@@ -871,7 +883,10 @@ bool D3D12Backend::CreateSwapChain(HWND hwnd) {
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.BufferCount = kFrames;
     sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    sd.Flags = tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+    // Waitable latency object keeps the flip queue short — without it, 3-buffer + Present(1)
+    // queues frames and feels laggy even when the FPS counter looks fine.
+    sd.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    if (tearing_) sd.Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
     ComPtr<IDXGISwapChain1> sc1;
     if (FAILED(factory_->CreateSwapChainForHwnd(queue_.Get(), hwnd, &sd, nullptr, nullptr, &sc1))) {
         LOGE("d3d12: no swap chain");
@@ -879,6 +894,12 @@ bool D3D12Backend::CreateSwapChain(HWND hwnd) {
     }
     factory_->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
     sc1.As(&swap_);
+    ComPtr<IDXGISwapChain2> sc2;
+    if (SUCCEEDED(swap_.As(&sc2))) {
+        sc2->SetMaximumFrameLatency(2);
+        frame_wait_ = sc2->GetFrameLatencyWaitableObject();
+        LOGR("d3d12: frame latency waitable, max=2");
+    }
     return true;
 }
 
@@ -2633,14 +2654,93 @@ bool SoftLightBlend(const State& s) {
     return src_ok && dst_ok;
 }
 
-// Small blended cookie (tutorial ground square): ≤24 verts, no Z-write, WRAP, UV outside 0..1.
-// Require !UnitTexcoords so character billboards (Rembrandt) stay untouched.
+// Min/max of float2 UV regs (raw VB path). Used to separate tutorial cookie from Rembrandt SoftLightVolume hits.
+bool SoftLightUvSpan(const Assembled& a, float& umin, float& umax, float& vmin, float& vmax) {
+    umin = vmin = 1e9f;
+    umax = vmax = -1e9f;
+    if (!a.vertices.empty() || !a.vertex_count) return false;
+    bool any = false;
+    for (int r = 0; r < 16; r++) {
+        const VertexElement& e = a.elements[size_t(r)];
+        if (!(a.regs >> r & 1) || e.format != DXGI_FORMAT_R32G32_FLOAT) continue;
+        const VertexBuffer& vb = a.buffers[e.buffer];
+        if (!vb.src || !vb.stride || uint64_t(a.vertex_count) * vb.stride > vb.bytes) return false;
+        for (uint32_t v = 0; v < a.vertex_count; v++) {
+            float uv[2];
+            std::memcpy(uv, vb.src + size_t(v) * vb.stride + e.offset, sizeof(uv));
+            umin = std::min(umin, uv[0]);
+            umax = std::max(umax, uv[0]);
+            vmin = std::min(vmin, uv[1]);
+            vmax = std::max(vmax, uv[1]);
+            any = true;
+        }
+    }
+    return any;
+}
+
+// World/clip position span of the first float3/float4 position-like register (raw VB).
+bool SoftLightPosSpan(const Assembled& a, float& dx, float& dy, float& dz) {
+    dx = dy = dz = 0;
+    if (!a.vertices.empty() || !a.vertex_count) return false;
+    for (int r = 0; r < 16; r++) {
+        const VertexElement& e = a.elements[size_t(r)];
+        if (!(a.regs >> r & 1)) continue;
+        bool f3 = e.format == DXGI_FORMAT_R32G32B32_FLOAT;
+        bool f4 = e.format == DXGI_FORMAT_R32G32B32A32_FLOAT;
+        if (!f3 && !f4) continue;
+        const VertexBuffer& vb = a.buffers[e.buffer];
+        if (!vb.src || !vb.stride || uint64_t(a.vertex_count) * vb.stride > vb.bytes) return false;
+        float mn[3] = {1e9f, 1e9f, 1e9f}, mx[3] = {-1e9f, -1e9f, -1e9f};
+        for (uint32_t v = 0; v < a.vertex_count; v++) {
+            float p[4] = {};
+            std::memcpy(p, vb.src + size_t(v) * vb.stride + e.offset, f4 ? 16u : 12u);
+            for (int i = 0; i < 3; i++) {
+                mn[i] = std::min(mn[i], p[i]);
+                mx[i] = std::max(mx[i], p[i]);
+            }
+        }
+        dx = mx[0] - mn[0];
+        dy = mx[1] - mn[1];
+        dz = mx[2] - mn[2];
+        return true;
+    }
+    return false;
+}
+
+// World soft-light cookie (64² volume): ≤24 verts, no Z-write, WRAP, UV outside 0..1, not pret.
 bool SoftLightVolume(const State& s, const Assembled& a) {
     if (!SoftLightBlend(s)) return false;
+    if (a.pretransformed) return false;
     if (!a.vertex_count || a.vertex_count > 24) return false;
     if (SimpleState(s, kMZWriteEnable)) return false;
     if (!AnyStageWraps(s) || UnitTexcoords(a)) return false;
+    // RECT / screen-space UV (0..640) is not a cookie; world cookies stay near ~[-2,2].
+    float umin, umax, vmin, vmax;
+    if (SoftLightUvSpan(a, umin, umax, vmin, vmax)) {
+        auto out = [](float x) { return x < -4.0f || x > 4.0f; };
+        if (out(umin) || out(umax) || out(vmin) || out(vmax)) return false;
+    }
     return true;
+}
+
+// Pret WRAP soft-blend quads (incl. tex=null). Real-tex subset used for cookie attempts; loose for diag skip.
+bool SoftLightScreenLoose(const State& s, const Assembled& a) {
+    if (!SoftLightBlend(s)) return false;
+    if (!a.pretransformed) return false;
+    if (!a.vertex_count || a.vertex_count > 6) return false;
+    if (SimpleState(s, kMZWriteEnable)) return false;
+    return AnyStageWraps(s);
+}
+
+// Screen-space soft light blit with real LIN RT + texel UV (cookie/blur target — both FAILED).
+bool SoftLightScreen(const State& s, const Assembled& a) {
+    if (!SoftLightScreenLoose(s, a)) return false;
+    TextureDesc td{};
+    if (!s.textures[0] || !Describe(s.textures[0], td) || !td.data || td.width < 2 || td.height < 2) return false;
+    float umin, umax, vmin, vmax;
+    if (!SoftLightUvSpan(a, umin, umax, vmin, vmax)) return false;
+    auto big = [](float x) { return x < -4.0f || x > 4.0f; };
+    return big(umin) || big(umax) || big(vmin) || big(vmax);
 }
 
 // CAMERASPACEPOSITION / projected TTFF on world meshes.
@@ -2669,18 +2769,114 @@ void D3D12Backend::SetTextureViewsAndSamplers(const State& s, const Assembled& a
     bool soft_blend = SoftLightBlend(s);
     bool soft_vol = SoftLightVolume(s, a);
     bool soft_proj = SoftLightProjected(s);
-    // Border on WRAP cookies with UVs outside 0..1 — never UnitTexcoords+border (hid Rembrandt).
-    bool soft_border = (soft_vol || soft_proj) && AnyStageWraps(s) && !unit;
+    bool soft_screen = SoftLightScreen(s, a);  // diag only — no cookie/border (blur/radial both failed)
+    bool soft_loose = SoftLightScreenLoose(s, a);
+    // Border only when UV island overlaps 0..1 (classic wrap falloff). Tutorial 64² cookie has V entirely
+    // in [-1,-0.74] — BORDER would sample black; keep WRAP and rely on AABB soft_cookie instead.
+    bool soft_border = false;
+    if ((soft_vol || soft_proj) && AnyStageWraps(s) && !unit) {
+        float umin = 0, umax = 0, vmin = 0, vmax = 0;
+        if (SoftLightUvSpan(a, umin, umax, vmin, vmax)) {
+            bool overlap_u = umax >= 0.0f && umin <= 1.0f;
+            bool overlap_v = vmax >= 0.0f && vmin <= 1.0f;
+            soft_border = overlap_u && overlap_v;
+        } else {
+            soft_border = true;
+        }
+    }
     bool clamp = soft_border || (AnyStageWraps(s) && unit);
     // Cap early spam; keep a rolling counter so tutorial soft draws still show up in the log.
+    // Extra fields: UV/pos span + stage0 tex — needed to narrow SoftLightVolume (Rembrandt vs tutorial).
     static int soft_logs = 0;
     static int soft_total = 0;
-    if (soft_vol || soft_proj) {
+    static int soft_miss_logs = 0;
+    static std::unordered_set<uint64_t> soft_fp;
+    static std::unordered_set<uint64_t> soft_miss_fp;
+    // Hunter: SoftLightBlend+WRAP small draws that miss Volume/Screen — A/B skips proved plate ≠ those classes.
+    if (soft_blend && AnyStageWraps(s) && a.vertex_count && a.vertex_count <= 64 && !soft_vol && !soft_screen &&
+        !soft_proj) {
+        float umin = 0, umax = 0, vmin = 0, vmax = 0;
+        bool has_uv = SoftLightUvSpan(a, umin, umax, vmin, vmax);
+        float pdx = 0, pdy = 0, pdz = 0;
+        bool has_pos = SoftLightPosSpan(a, pdx, pdy, pdz);
+        TextureDesc td{};
+        bool has_tex = s.textures[0] && Describe(s.textures[0], td);
+        uint32_t zw = SimpleState(s, kMZWriteEnable);
+        uint32_t zen = s.rs[kRsZEnable];
+        // Reject reasons vs SoftLightVolume (bitfield).
+        uint32_t why = 0;
+        if (a.pretransformed) why |= 1;
+        if (a.vertex_count > 24) why |= 2;
+        if (zw) why |= 4;
+        if (unit) why |= 8;
+        if (has_uv && (umin < -4.f || umax > 4.f || vmin < -4.f || vmax > 4.f)) why |= 16;
+        if (!has_uv && !a.vertices.empty()) why |= 32;  // converted VB — UV span unread
+        if (soft_loose) why |= 64;                     // would be ScreenLoose
+        uint64_t mfp = Hash(&a.vertex_count, sizeof(a.vertex_count));
+        mfp = Hash(&why, sizeof(why), mfp);
+        uint8_t pret = a.pretransformed ? 1 : 0;
+        mfp = Hash(&pret, sizeof(pret), mfp);
+        if (has_tex) {
+            mfp = Hash(&td.width, sizeof(td.width), mfp);
+            mfp = Hash(&td.height, sizeof(td.height), mfp);
+            mfp = Hash(&td.format, sizeof(td.format), mfp);
+        }
+        bool novel = soft_miss_fp.insert(mfp).second;
+        if (novel || soft_miss_logs < 40) {
+            LOGR("softlight MISS: verts=%u pret=%d zw=%u zen=%u unit=%d loose=%d why=%X "
+                 "src=%X dst=%X tex=%08X %ux%u fmt=%u uv=%d[%.3f..%.3f,%.3f..%.3f] pos=%d[%.1f,%.1f,%.1f] "
+                 "conv=%d fp=%016llX",
+                 a.vertex_count, pret, zw, zen, unit ? 1 : 0, soft_loose ? 1 : 0, why, SimpleState(s, kMSrcBlend),
+                 SimpleState(s, kMDestBlend), has_tex ? td.data : 0, has_tex ? td.width : 0, has_tex ? td.height : 0,
+                 has_tex ? td.format : 0, has_uv ? 1 : 0, umin, umax, vmin, vmax, has_pos ? 1 : 0, pdx, pdy, pdz,
+                 a.vertices.empty() ? 0 : 1, (unsigned long long)mfp);
+            soft_miss_logs++;
+        }
+    }
+    if (soft_vol || soft_proj || soft_screen) {
         soft_total++;
-        if (soft_logs < 24 || (soft_total % 120) == 0) {
-            LOGR("softlight hit: vol=%d proj=%d verts=%u wrap=%d unit=%d border=%d src=%X dst=%X total=%d",
-                 soft_vol ? 1 : 0, soft_proj ? 1 : 0, a.vertex_count, AnyStageWraps(s) ? 1 : 0, unit ? 1 : 0,
-                 soft_border ? 1 : 0, SimpleState(s, kMSrcBlend), SimpleState(s, kMDestBlend), soft_total);
+        float umin = 0, umax = 0, vmin = 0, vmax = 0;
+        bool has_uv = SoftLightUvSpan(a, umin, umax, vmin, vmax);
+        float pdx = 0, pdy = 0, pdz = 0;
+        bool has_pos = SoftLightPosSpan(a, pdx, pdy, pdz);
+        TextureDesc td{};
+        bool has_tex = s.textures[0] && Describe(s.textures[0], td);
+        uint32_t gen0 = (s.tss[0][kTssTexCoordIndex] >> 16) & 7;
+        uint32_t ttf0 = s.tss[0][kTssTextureTransformFlags];
+        uint32_t cop0 = s.tss[0][kTssColorOp];
+        uint32_t zen = s.rs[kRsZEnable];
+        uint32_t atest = SimpleState(s, kMAlphaTestEnable);
+        // Quantize UV/pos so camera motion does not invent a new fingerprint every frame.
+        auto q8 = [](float x) -> int32_t { return int32_t(std::lround(x * 8.0f)); };
+        int32_t qu[4] = {has_uv ? q8(umin) : 0, has_uv ? q8(umax) : 0, has_uv ? q8(vmin) : 0, has_uv ? q8(vmax) : 0};
+        int32_t qp[3] = {has_pos ? q8(pdx) : 0, has_pos ? q8(pdy) : 0, has_pos ? q8(pdz) : 0};
+        uint64_t fp = Hash(&a.vertex_count, sizeof(a.vertex_count));
+        fp = Hash(&soft_vol, sizeof(soft_vol), fp);
+        fp = Hash(&soft_proj, sizeof(soft_proj), fp);
+        fp = Hash(&soft_screen, sizeof(soft_screen), fp);
+        if (has_tex) {
+            fp = Hash(&td.data, sizeof(td.data), fp);
+            fp = Hash(&td.width, sizeof(td.width), fp);
+            fp = Hash(&td.height, sizeof(td.height), fp);
+            fp = Hash(&td.format, sizeof(td.format), fp);
+        }
+        fp = Hash(qu, sizeof(qu), fp);
+        fp = Hash(qp, sizeof(qp), fp);
+        fp = Hash(&gen0, sizeof(gen0), fp);
+        fp = Hash(&ttf0, sizeof(ttf0), fp);
+        fp = Hash(&cop0, sizeof(cop0), fp);
+        uint8_t pret = a.pretransformed ? 1 : 0;
+        fp = Hash(&pret, sizeof(pret), fp);
+        bool novel = soft_fp.insert(fp).second;
+        if (novel || soft_logs < 32 || (soft_total % 120) == 0) {
+            LOGR("softlight hit: vol=%d proj=%d scr=%d verts=%u wrap=%d unit=%d border=%d pret=%d zen=%u atest=%u "
+                 "src=%X dst=%X gen0=%u ttf0=%X cop0=%u tex=%08X %ux%u fmt=%u "
+                 "uv=%d[%.3f..%.3f,%.3f..%.3f] pos=%d[%.1f,%.1f,%.1f] fp=%016llX novel=%d total=%d",
+                 soft_vol ? 1 : 0, soft_proj ? 1 : 0, soft_screen ? 1 : 0, a.vertex_count, AnyStageWraps(s) ? 1 : 0,
+                 unit ? 1 : 0, soft_border ? 1 : 0, a.pretransformed ? 1 : 0, zen, atest, SimpleState(s, kMSrcBlend),
+                 SimpleState(s, kMDestBlend), gen0, ttf0, cop0, has_tex ? td.data : 0,
+                 has_tex ? td.width : 0, has_tex ? td.height : 0, has_tex ? td.format : 0, has_uv ? 1 : 0, umin, umax,
+                 vmin, vmax, has_pos ? 1 : 0, pdx, pdy, pdz, (unsigned long long)fp, novel ? 1 : 0, soft_total);
             soft_logs++;
         }
     }
@@ -2903,9 +3099,14 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     if (!BindStageTexturesAndTargets(s, stages)) return;
     PixelKey pk = MakePixelKey(s, stages.info);
     pk.quad = sh.quad;
-    // Soft cookie quads / projected lights: UV radial falloff softens the hard ground plate.
-    // DO NOT force pk.quad=0 / sh.quad=false here — that + soft_cookie alpha broke Rembrandt into a lit box.
-    if (SoftLightVolume(s, a) || SoftLightProjected(s)) pk.soft_cookie = 1;
+    // Volume=2 (RGB+a, softcen=UV AABB). Projected=1 RGB-only.
+    // DO NOT soft_cookie on SoftLightScreen — =3 radial useless; blur ghosted whole frame (2026-10-30).
+    // DO NOT force pk.quad=0.
+    bool soft_vol = SoftLightVolume(s, a);
+    if (soft_vol)
+        pk.soft_cookie = 2;
+    else if (SoftLightProjected(s))
+        pk.soft_cookie = 1;
     sh.pkey = Hash(&pk, sizeof(pk));
     EnsurePixelShader(pk, sh);
     if (!sh.vs_code || !sh.ps_code) return;
@@ -2924,6 +3125,21 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     GuestExtent size;
     SurfaceSize(bound_rt_ ? s.rt : s.zs, size.w, size.h);
     DrawConstants c{};
+    // Default: unit-square cookie (centre 0.5, half-extent 0.5 → sf=0 at mid-edges).
+    c.softcen[0] = 0.5f;
+    c.softcen[1] = 0.5f;
+    c.softcen[2] = 0.5f;
+    c.softcen[3] = 0.5f;
+    if (soft_vol) {
+        float umin, umax, vmin, vmax;
+        if (SoftLightUvSpan(a, umin, umax, vmin, vmax)) {
+            c.softcen[0] = 0.5f * (umin + umax);
+            c.softcen[1] = 0.5f * (vmin + vmax);
+            // Half-extent so AABB corners hit sf≈0 (inscribed ellipse).
+            c.softcen[2] = std::max(0.5f * (umax - umin), 1e-3f);
+            c.softcen[3] = std::max(0.5f * (vmax - vmin), 1e-3f);
+        }
+    }
     UploadConstants(s, sh, k, stages, size, c);
     if (ext_) binds_ = {};
 
@@ -3236,7 +3452,9 @@ void D3D12Backend::ResizeSwap() {
         if (f.fence) WaitFence(f.fence);
     }
     for (auto& b : bb_) b.Reset();
-    swap_->ResizeBuffers(kFrames, w, h, DXGI_FORMAT_B8G8R8A8_UNORM, tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
+    UINT flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    if (tearing_) flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+    swap_->ResizeBuffers(kFrames, w, h, DXGI_FORMAT_B8G8R8A8_UNORM, flags);
     CreateBackBufferViews();
     bb_w_ = w;
     bb_h_ = h;
@@ -3298,7 +3516,148 @@ void D3D12Backend::UploadGammaRamp() {
     cl_->CopyTextureRegion(&dl, 0, 0, 0, &sl, nullptr);
 }
 
-void D3D12Backend::BlitFrame(Target& t) {
+ID3DBlob* D3D12Backend::CompileFsrFile(const wchar_t* file, const char* entry, const char* profile, uint64_t& hash) {
+    std::filesystem::path path = app::ExeDir() / "fsr" / file;
+    if (!std::filesystem::exists(path)) {
+        // Dev tree: shaders live next to the sources when not yet copied beside the exe.
+        path = std::filesystem::path(__FILE__).parent_path() / "fsr" / file;
+    }
+    std::wstring wpath = path.wstring();
+    uint64_t profile_seed = Hash(profile, std::strlen(profile));
+    hash = Hash(entry, std::strlen(entry), Hash(wpath.data(), wpath.size() * sizeof(wchar_t), profile_seed));
+    auto it = blobs_.find(hash);
+    if (it != blobs_.end()) return it->second.Get();
+    ComPtr<ID3DBlob> code, err;
+    PerfScope perf_compile{g_perf.compile};
+    g_perf.shaders++;
+    UINT flags = D3DCOMPILE_OPTIMIZATION_LEVEL1;
+    HRESULT hr = D3DCompileFromFile(wpath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, entry, profile, flags, 0,
+                                    &code, &err);
+    if (FAILED(hr)) {
+        LOGE("d3d12: FSR %ls %s compile failed: %s", file, profile,
+             err ? static_cast<const char*>(err->GetBufferPointer()) : "?");
+        blobs_[hash] = nullptr;
+        return nullptr;
+    }
+    blobs_[hash] = code;
+    LOGR("d3d12: FSR compiled %ls::%s", file, entry);
+    return code.Get();
+}
+
+ID3D12PipelineState* D3D12Backend::EnsureFsrPipeline(const wchar_t* file, const char* entry) {
+    ComPtr<ID3D12PipelineState>& pso = (std::wcscmp(file, L"easu.hlsl") == 0) ? fsr_easu_pso_ : fsr_rcas_pso_;
+    if (pso) return pso.Get();
+    uint64_t h;
+    ID3DBlob* vs = CompileFsrFile(file, "vs", "vs_5_0", h);
+    ID3DBlob* ps = CompileFsrFile(file, entry, "ps_5_0", h);
+    if (!vs || !ps) return nullptr;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC d = FullScreenPipelineDesc(vs, ps, kBgra);
+    if (FAILED(dev_->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&pso)))) {
+        LOGE("d3d12: FSR PSO failed for %ls", file);
+        return nullptr;
+    }
+    return pso.Get();
+}
+
+bool D3D12Backend::EnsureFsrTarget(uint32_t w, uint32_t h) {
+    if (fsr_easu_ && fsr_easu_w_ == w && fsr_easu_h_ == h) return true;
+    if (fsr_rtv_slot_ != UINT32_MAX) {
+        free_rtv_.push_back(fsr_rtv_slot_);
+        fsr_rtv_slot_ = UINT32_MAX;
+    }
+    fsr_easu_.Reset();
+    fsr_easu_w_ = fsr_easu_h_ = 0;
+    if (free_rtv_.empty()) {
+        LOGE("d3d12: FSR — no free RTV slot");
+        return false;
+    }
+    D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+    D3D12_RESOURCE_DESC rd = {};
+    rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    rd.Width = w;
+    rd.Height = h;
+    rd.DepthOrArraySize = 1;
+    rd.MipLevels = 1;
+    rd.Format = kBgra;
+    rd.SampleDesc.Count = 1;
+    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    D3D12_CLEAR_VALUE clear{kBgra, {0, 0, 0, 1}};
+    if (FAILED(dev_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                              &clear, IID_PPV_ARGS(&fsr_easu_)))) {
+        LOGE("d3d12: FSR EASU target create failed");
+        return false;
+    }
+    fsr_easu_state_ = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    fsr_rtv_slot_ = free_rtv_.back();
+    free_rtv_.pop_back();
+    dev_->CreateRenderTargetView(fsr_easu_.Get(), nullptr, Cpu(rtv_heap_.Get(), fsr_rtv_slot_, rtv_inc_));
+    fsr_easu_w_ = w;
+    fsr_easu_h_ = h;
+    return true;
+}
+
+void D3D12Backend::BlitFrameFsr(Target& t, uint32_t bi, float vw, float vh, float vp_x, float vp_y) {
+    uint32_t ow = std::max(1u, uint32_t(vw + 0.5f));
+    uint32_t oh = std::max(1u, uint32_t(vh + 0.5f));
+    ID3D12PipelineState* easu = EnsureFsrPipeline(L"easu.hlsl", "psmain");
+    ID3D12PipelineState* rcas = EnsureFsrPipeline(L"rcas.hlsl", "psmain");
+    if (!easu || !rcas || !EnsureFsrTarget(ow, oh)) {
+        float uv[4] = {0, 0, 1, 1};
+        Blit(t.res.Get(), t.fmt, uv, {.gamma = gamma_});
+        return;
+    }
+    Transition(t.res.Get(), t.state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    Transition(fsr_easu_.Get(), fsr_easu_state_, D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE fsr_rtv = Cpu(rtv_heap_.Get(), fsr_rtv_slot_, rtv_inc_);
+    cl_->OMSetRenderTargets(1, &fsr_rtv, FALSE, nullptr);
+    D3D12_VIEWPORT fsr_vp{0, 0, float(ow), float(oh), 0, 1};
+    D3D12_RECT fsr_sc{0, 0, LONG(ow), LONG(oh)};
+    cl_->RSSetViewports(1, &fsr_vp);
+    cl_->RSSetScissorRects(1, &fsr_sc);
+
+    uint32_t con0[4], con1[4], con2[4], con3[4];
+    fsr1::EasuCon(con0, con1, con2, con3, float(t.w), float(t.h), float(t.w), float(t.h), float(ow), float(oh));
+    Alloc cb = Upload(256, 256);
+    std::memcpy(cb.cpu, con0, 16);
+    std::memcpy(cb.cpu + 16, con1, 16);
+    std::memcpy(cb.cpu + 32, con2, 16);
+    std::memcpy(cb.cpu + 48, con3, 16);
+
+    uint32_t slot = AllocSrvSlots(2);
+    D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
+    sv.Format = t.fmt;
+    sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sv.Texture2D.MipLevels = 1;
+    dev_->CreateShaderResourceView(t.res.Get(), &sv, Cpu(srv_heap_.Get(), slot, srv_inc_));
+    sv.Format = kBgra;
+    dev_->CreateShaderResourceView(lut_.Get(), &sv, Cpu(srv_heap_.Get(), slot + 1, srv_inc_));
+    DrawFullScreen(easu, cb.gpu, slot, EnsureBlitSamplers());
+
+    Transition(fsr_easu_.Get(), fsr_easu_state_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    D3D12_CPU_DESCRIPTOR_HANDLE bb = Cpu(rtv_heap_.Get(), kRtvCount + bi, rtv_inc_);
+    cl_->OMSetRenderTargets(1, &bb, FALSE, nullptr);
+    D3D12_VIEWPORT vp{vp_x, vp_y, vw, vh, 0, 1};
+    D3D12_RECT scissor{0, 0, LONG(bb_w_), LONG(bb_h_)};
+    cl_->RSSetViewports(1, &vp);
+    cl_->RSSetScissorRects(1, &scissor);
+
+    uint32_t rcon[4];
+    fsr1::RcasCon(rcon, fsr1::QualitySharpness(app::Get().fsr));
+    Alloc rcb = Upload(256, 256);
+    std::memcpy(rcb.cpu, rcon, 16);
+    float opts[4] = {gamma_ ? 1.0f : 0.0f, 0, 0, 0};
+    std::memcpy(rcb.cpu + 16, opts, 16);
+
+    uint32_t rslot = AllocSrvSlots(2);
+    sv.Format = kBgra;
+    dev_->CreateShaderResourceView(fsr_easu_.Get(), &sv, Cpu(srv_heap_.Get(), rslot, srv_inc_));
+    dev_->CreateShaderResourceView(lut_.Get(), &sv, Cpu(srv_heap_.Get(), rslot + 1, srv_inc_));
+    DrawFullScreen(rcas, rcb.gpu, rslot, EnsureBlitSamplers());
+}
+
+void D3D12Backend::BlitFrame(Target& t, uint32_t bi) {
     // 16:9 when the console reports a widescreen display, else 4:3
     bool wide = app::Widescreen();
     float aspect = wide ? 16.0f / 9.0f : 4.0f / 3.0f;
@@ -3306,13 +3665,20 @@ void D3D12Backend::BlitFrame(Target& t) {
     float h = float(bb_h_);
     float vw = std::min(w, h * aspect);
     float vh = vw / aspect;
+    float vp_x = (w - vw) / 2, vp_y = (h - vh) / 2;
     float uv[4] = {0, 0, 1, 1};
-    D3D12_VIEWPORT vp{(w - vw) / 2, (h - vh) / 2, vw, vh, 0, 1};
+    D3D12_VIEWPORT vp{vp_x, vp_y, vw, vh, 0, 1};
     D3D12_RECT scissor{0, 0, LONG(bb_w_), LONG(bb_h_)};
     cl_->RSSetViewports(1, &vp);
     cl_->RSSetScissorRects(1, &scissor);
     binds_ = {};
     Transition(t.res.Get(), t.state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    uint32_t fsr = app::Get().fsr;
+    bool upscale = float(t.w) + 0.5f < vw || float(t.h) + 0.5f < vh;
+    if (fsr && upscale) {
+        BlitFrameFsr(t, bi, vw, vh, vp_x, vp_y);
+        return;
+    }
     Blit(t.res.Get(), t.fmt, uv, {.gamma = gamma_});
 }
 
@@ -3336,7 +3702,7 @@ void D3D12Backend::DrawFrame(Target* t, uint32_t bi) {
     cl_->ClearRenderTargetView(rh, black, 0, nullptr);
     cl_->OMSetRenderTargets(1, &rh, FALSE, nullptr);
     bound_rt_ = bound_ds_ = nullptr;
-    if (t) BlitFrame(*t);
+    if (t) BlitFrame(*t, bi);
     RenderUi();
     Transition(bb_[bi].Get(), bs, D3D12_RESOURCE_STATE_PRESENT);
 }
@@ -3438,8 +3804,11 @@ void D3D12Backend::Present(const Surface& front) {
     Submit(false);
     present_fence_[presents_ % (kFrames + 1)].store(fence_value_);
     DeliverReports();
-    bool vsync = app::Get().vsync;
+    // Pace owns the frame period; only use DXGI vsync when the panel divides the target evenly.
+    bool vsync = app::PresentUseVsync();
     auto perf_swap = PerfClock::now();
+    // Wait for a free buffer before Present so we do not pile 2–3 frames of display latency.
+    if (frame_wait_) WaitForSingleObjectEx(frame_wait_, 1000, TRUE);
     swap_->Present(vsync ? 1 : 0, !vsync && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
     g_perf.swap += PerfMs(perf_swap);
 

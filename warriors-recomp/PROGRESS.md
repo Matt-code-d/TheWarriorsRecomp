@@ -36,9 +36,10 @@ If you re-extract the ISO, re-run `tools\alias_eur_movies.ps1` so NTSC-named `.b
 
 ## Next
 
-- [ ] Tutorial soft-light square: diag `src=302 dst=303` alpha cookies; soft_cookie RGB-only + WRAP border (non-unit). **FAILED 2026-10-30 (reverted):** `outc.a *= falloff` and/or force `pk.quad=0` on soft draws → Rembrandt/Coney Island hard lit box. Do not reapply (see `.cursor/rules/soft-light-rembrandt.mdc`).
+- [ ] Tutorial soft-light square: A/B SoftLight classes ruled out as sole painter. Hunter: `softlight MISS:` (blend+WRAP ≤64 verts outside vol/scr). Run tutorial, collect novel MISS lines.
 - [x] Cutscene audio under tutorial: SilenceAll had **paused** 65 XACT buffers; game `Pause(0)` resumed mid-cue presentation music. Now **hard stop + rewind** (inspired by stop-on-skip pattern, not pause). Drop late stream Process 2s.
-- [x] Frame pacing: with VSync on and `fps_cap` ≥ monitor Hz, skip software `Pace()` after `Present` (double-wait was the hitch). Cap below refresh still software-limited.
+- [x] Frame pacing: waitable swap chain + max latency 2. **EUR PAL guest clock 50 Hz** (VBlank was 60 → game ~20% fast even at “60 FPS”). `Pace` clamps to ≤50; default `fps_cap=50`.
+- [x] **FSR 1.0** (AMD MIT EASU+RCAS) on present blit when `fsr=1..4` and render scale < output; launcher GRAPHICS dropdown + `settings.toml`.
 - [x] Launcher UI follows selected game language (En/De/Fr/Es/It)
 - [x] Launcher Warriors theme (jersey yellow / vest red / asphalt)
 - [ ] Confirm in-game: logos / menu / language / audio / first mission / tutorial glow
@@ -46,5 +47,9 @@ If you re-extract the ISO, re-run `tools\alias_eur_movies.ps1` so NTSC-named `.b
 
 ## Roadmap
 
+- [ ] **Decouple sim from FPS** — like other recomps: high FPS without speeding up gameplay.
+  - [x] **Phase 1 (2026-10-30):** shared frame epoch for guest VBlank + `Pace`; `PresentUseVsync` only when refresh ÷ target; timing stats in log.
+  - [x] **Phase 2 (2026-10-30):** hooks on timing getters/setter `@ 0xB7AD0/AE0/AF0/B00/7850` scale floats that look like frame dt (~1/50); `MeasuredFrameDt`; display may exceed 50 Hz; launcher FPS unlocked again.
+  - [ ] **Phase 3:** verify in-game at 60/120/uncapped (movement, animations, audio); widen hooks if some systems still use unscaled `push 0x3CA3D70A`.
 - [ ] **Mouse + keyboard** — full KBM support, enable/disable from the launcher (alongside gamepad)
 - [ ] **Online co-op multiplayer** — networked co-op (host/join); scope after single-player bring-up is solid

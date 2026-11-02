@@ -14,12 +14,10 @@
 
     <Border Grid.Column="0" Background="{StaticResource Side}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
       <DockPanel>
-        <StackPanel DockPanel.Dock="Top" Margin="18,28,16,24">
-          <TextBlock Text="THE WARRIORS" FontSize="20" FontWeight="Bold" Foreground="{StaticResource Jersey}"
-                     FontFamily="Bahnschrift Condensed, Bahnschrift, Segoe UI"/>
-          <Border Height="3" Background="{StaticResource VestRed}" Margin="0,8,40,0" HorizontalAlignment="Left" Width="72"/>
-          <TextBlock Text="XBE RECOMP" FontSize="11" Foreground="{StaticResource Mute}" Margin="0,10,0,0"
-                     FontWeight="SemiBold"/>
+        <StackPanel DockPanel.Dock="Top" Margin="14,22,12,20">
+          <Image Source="pack://application:,,,/Assets/thewarriorsrecompmin.png"
+                 Stretch="Uniform" MaxWidth="190" HorizontalAlignment="Left"
+                 RenderOptions.BitmapScalingMode="HighQuality"/>
         </StackPanel>
 
         <StackPanel DockPanel.Dock="Bottom" Margin="16,0,16,20">
@@ -113,6 +111,9 @@
 
             <TextBlock x:Name="LblRenderScale" Style="{StaticResource FieldLabel}" Text="RENDER SCALE"/>
             <ComboBox x:Name="CmbRenderScale" DisplayMemberPath="Label" Margin="0,0,0,14" SelectionChanged="Graphics_Changed"/>
+
+            <TextBlock x:Name="LblFsr" Style="{StaticResource FieldLabel}" Text="FSR 1.0"/>
+            <ComboBox x:Name="CmbFsr" DisplayMemberPath="Label" Margin="0,0,0,14" SelectionChanged="Graphics_Changed"/>
 
             <TextBlock x:Name="LblAniso" Style="{StaticResource FieldLabel}" Text="ANISOTROPIC FILTERING"/>
             <ComboBox x:Name="CmbAniso" DisplayMemberPath="Label" Margin="0,0,0,14" SelectionChanged="Graphics_Changed"/>

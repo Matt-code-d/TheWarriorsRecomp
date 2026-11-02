@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.jpg" alt="The Warriors — Recomp" width="720">
+  <img src="thewarriorsrecomp.png" alt="The Warriors Recomp" width="720">
 </p>
 
 Unofficial native PC bring-up of **The Warriors** (original Xbox), **European** multi-language disc (`En,Fr,De,Es,It`), built with the [Xbox XBE Recomp](https://github.com/TGP482/XboxXBERecomp) toolchain.

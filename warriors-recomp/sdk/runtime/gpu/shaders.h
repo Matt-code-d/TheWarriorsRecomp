@@ -34,7 +34,8 @@ struct PixelKey {
     uint32_t proj = 0;       // fixed function: bit per stage sampled at coordinates divided by w
     uint32_t quad = 0;       // a screen quad: QuadHlsl
     uint32_t alphatest = 0;  // alpha test on: only then may the shader discard, which turns off early depth tests
-    uint32_t soft_cookie = 0;  // soft light volume: force radial UV falloff (hard square → soft circle)
+    // soft light: 1=RGB, 2=RGB+alpha (world Volume). 3=screen÷texsize — DO NOT use (Rembrandt 2026-10-30).
+    uint32_t soft_cookie = 0;
     bool operator==(const PixelKey& o) const;
 };
 
@@ -106,6 +107,7 @@ struct DrawConstants {
     float lt[8][7][4];   // per light: diffuse, specular, ambient, position range, direction falloff, attenuation, cos theta/2 phi/2
     float rtshift[4];    // per kTexTarget stage: host pixels its reads move along x and y, negative up and left
     float zparams[4];    // ReversedDepthHlsl: a w buffer's scale (0 for a z buffer), its far w, the polygon offset
+    float softcen[4];    // xy = soft_cookie UV centre, zw = AABB half-extent (falloff radius)
 };
 
 }  // namespace gpu

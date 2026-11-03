@@ -10,6 +10,7 @@
 #include <d3d12sdklayers.h>
 #include <d3dcompiler.h>
 #include <dxgi1_6.h>
+#include <wincodec.h>
 #include <wrl/client.h>
 
 #include <algorithm>
@@ -59,6 +60,18 @@ constexpr uint32_t kDsvCount = 256;
 constexpr DXGI_FORMAT kBgra = DXGI_FORMAT_B8G8R8A8_UNORM;
 constexpr uint32_t kQueries = 8192;  // occlusion queries in flight, several frames of counted draws
 constexpr uint32_t kNoQuery = ~0u;
+
+// F9 title-screen clip for the launcher HOME background
+struct TitleBgState {
+    bool active = false;
+    int frame = 0;
+    int fps = 10;
+    double seconds = 6.0;
+    int target = 60;
+    std::chrono::steady_clock::time_point start{};
+    std::filesystem::path dir;
+};
+TitleBgState title_bg_;
 
 // perf diagnostic: where a frame's time goes, logged once a second with diag::Perf
 using PerfClock = std::chrono::steady_clock;
@@ -617,6 +630,11 @@ private:
     void ResizeSwap();
     void UploadGammaRamp();
     void DrawFrame(Target* t, uint32_t bi);
+    ComPtr<ID3D12Resource> RecordTitleBgCopy(uint32_t bi, D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp, uint32_t& w,
+                                             uint32_t& h);
+    void BeginTitleBgClip();
+    void TitleBgSaveSample(ID3D12Resource* rb, const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp, uint32_t w, uint32_t h);
+    bool WriteTitleBgJpeg(const std::filesystem::path& path, uint32_t w, uint32_t h, const uint8_t* bgra);
     void BlitFrame(Target& t, uint32_t bi);
     void BlitFrameFsr(Target& t, uint32_t bi, float vw, float vh, float vp_x, float vp_y);
     bool EnsureFsrTarget(uint32_t w, uint32_t h);
@@ -3644,7 +3662,9 @@ void D3D12Backend::BlitFrameFsr(Target& t, uint32_t bi, float vw, float vh, floa
     cl_->RSSetScissorRects(1, &scissor);
 
     uint32_t rcon[4];
-    fsr1::RcasCon(rcon, fsr1::QualitySharpness(app::Get().fsr));
+    // settings.toml sharpness 0–100 → RCAS stops (0 = max sharp); default 20 ≈ AMD sample 0.2
+    float rcas_stops = float(std::min(app::Get().sharpness, 100u)) / 100.f;
+    fsr1::RcasCon(rcon, rcas_stops);
     Alloc rcb = Upload(256, 256);
     std::memcpy(rcb.cpu, rcon, 16);
     float opts[4] = {gamma_ ? 1.0f : 0.0f, 0, 0, 0};
@@ -3792,6 +3812,20 @@ void D3D12Backend::Present(const Surface& front) {
     } else if (g_capture.exchange(false) && CaptureOn()) {
         StartCapture();
     }
+    // Launcher drops request_title_bg beside the exe; F9 starts a short clip.
+    {
+        auto flag = app::ExeDir() / "request_title_bg";
+        std::error_code ec;
+        if (std::filesystem::exists(flag, ec)) {
+            std::filesystem::remove(flag, ec);
+            g_title_bg.store(true);
+        }
+        static SHORT prev_f9 = 0;
+        SHORT f9 = GetAsyncKeyState(VK_F9);
+        if ((f9 & 0x8000) && !(prev_f9 & 0x8000)) g_title_bg.store(true);
+        prev_f9 = f9;
+        if (g_title_bg.exchange(false)) BeginTitleBgClip();
+    }
     ResizeSwap();
     Target* t = EnsureTarget(front, false);
     if (t && LatchCpuWrite(*t)) UploadTarget(*t, front);
@@ -3801,8 +3835,27 @@ void D3D12Backend::Present(const Surface& front) {
 
     uint32_t bi = swap_->GetCurrentBackBufferIndex();
     DrawFrame(t, bi);
+
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT title_fp{};
+    uint32_t title_w = 0, title_h = 0;
+    ComPtr<ID3D12Resource> title_rb;
+    bool title_sample = false;
+    if (title_bg_.active) {
+        auto now = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(now - title_bg_.start).count();
+        double due = title_bg_.frame / double(title_bg_.fps);
+        if (elapsed + 1e-4 >= due) {
+            title_rb = RecordTitleBgCopy(bi, title_fp, title_w, title_h);
+            title_sample = title_rb != nullptr;
+        }
+    }
+
     Submit(false);
     present_fence_[presents_ % (kFrames + 1)].store(fence_value_);
+    if (title_sample) {
+        WaitFence(fence_value_);
+        TitleBgSaveSample(title_rb.Get(), title_fp, title_w, title_h);
+    }
     DeliverReports();
     // Pace owns the frame period; only use DXGI vsync when the panel divides the target evenly.
     bool vsync = app::PresentUseVsync();
@@ -3820,6 +3873,147 @@ void D3D12Backend::Present(const Surface& front) {
     CountFps();
     if (diag::Perf()) LogPerf();
     ApplySettings();
+}
+
+void D3D12Backend::BeginTitleBgClip() {
+    if (title_bg_.active) {
+        LOGI("F9: title clip already recording (%d/%d)", title_bg_.frame, title_bg_.target);
+        return;
+    }
+    title_bg_ = TitleBgState{};
+    title_bg_.active = true;
+    title_bg_.fps = 10;
+    title_bg_.seconds = 6.0;
+    title_bg_.target = int(title_bg_.fps * title_bg_.seconds + 0.5);
+    title_bg_.start = std::chrono::steady_clock::now();
+    title_bg_.dir = app::ExeDir() / "launcher_title_bg";
+    std::error_code ec;
+    std::filesystem::remove_all(title_bg_.dir, ec);
+    std::filesystem::create_directories(title_bg_.dir, ec);
+    LOGI("F9: recording title clip → %s (%ds @ %dfps)", title_bg_.dir.string().c_str(), int(title_bg_.seconds),
+         title_bg_.fps);
+    MessageBeep(MB_ICONASTERISK);
+}
+
+ComPtr<ID3D12Resource> D3D12Backend::RecordTitleBgCopy(uint32_t bi, D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp, uint32_t& w,
+                                                       uint32_t& h) {
+    ID3D12Resource* bb = bb_[bi].Get();
+    if (!bb) return nullptr;
+    D3D12_RESOURCE_DESC rd = bb->GetDesc();
+    w = uint32_t(rd.Width);
+    h = uint32_t(rd.Height);
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout{};
+    UINT rows = 0;
+    UINT64 row_size = 0, bytes = 0;
+    dev_->GetCopyableFootprints(&rd, 0, 1, 0, &layout, &rows, &row_size, &bytes);
+    fp = layout;
+    ComPtr<ID3D12Resource> rb;
+    D3D12_HEAP_PROPERTIES hp{D3D12_HEAP_TYPE_READBACK};
+    D3D12_RESOURCE_DESC bd = BufferDesc(bytes);
+    if (FAILED(dev_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                             IID_PPV_ARGS(&rb)))) {
+        LOGE("F9: readback alloc failed");
+        return nullptr;
+    }
+    D3D12_RESOURCE_STATES st = D3D12_RESOURCE_STATE_PRESENT;
+    Transition(bb, st, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    D3D12_TEXTURE_COPY_LOCATION dst{rb.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+    dst.PlacedFootprint = layout;
+    D3D12_TEXTURE_COPY_LOCATION src{bb, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    cl_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    Transition(bb, st, D3D12_RESOURCE_STATE_PRESENT);
+    return rb;
+}
+
+void DownscaleBgra(const uint8_t* src, uint32_t sw, uint32_t sh, uint32_t pitch, uint32_t dw, uint32_t dh,
+                   std::vector<uint8_t>& out) {
+    out.resize(size_t(dw) * dh * 4);
+    for (uint32_t y = 0; y < dh; y++) {
+        uint32_t sy = y * sh / dh;
+        for (uint32_t x = 0; x < dw; x++) {
+            uint32_t sx = x * sw / dw;
+            const uint8_t* s = src + size_t(sy) * pitch + size_t(sx) * 4;
+            uint8_t* d = out.data() + (size_t(y) * dw + x) * 4;
+            d[0] = s[0];
+            d[1] = s[1];
+            d[2] = s[2];
+            d[3] = 255;
+        }
+    }
+}
+
+bool D3D12Backend::WriteTitleBgJpeg(const std::filesystem::path& path, uint32_t w, uint32_t h, const uint8_t* bgra) {
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    ComPtr<IWICImagingFactory> wic;
+    ComPtr<IWICStream> stream;
+    ComPtr<IWICBitmapEncoder> enc;
+    ComPtr<IWICBitmapFrameEncode> frame;
+    ComPtr<IWICBitmap> bitmap;
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic));
+    if (SUCCEEDED(hr))
+        hr = wic->CreateBitmapFromMemory(w, h, GUID_WICPixelFormat32bppBGRA, w * 4, w * h * 4,
+                                         const_cast<BYTE*>(bgra), &bitmap);
+    if (SUCCEEDED(hr)) hr = wic->CreateStream(&stream);
+    if (SUCCEEDED(hr)) hr = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
+    if (SUCCEEDED(hr)) hr = wic->CreateEncoder(GUID_ContainerFormatJpeg, nullptr, &enc);
+    if (SUCCEEDED(hr)) hr = enc->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+    if (SUCCEEDED(hr)) hr = enc->CreateNewFrame(&frame, nullptr);
+    if (SUCCEEDED(hr)) hr = frame->Initialize(nullptr);
+    if (SUCCEEDED(hr)) hr = frame->SetSize(w, h);
+    WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppBGRA;
+    if (SUCCEEDED(hr)) hr = frame->SetPixelFormat(&fmt);
+    if (SUCCEEDED(hr)) hr = frame->WriteSource(bitmap.Get(), nullptr);
+    if (SUCCEEDED(hr)) hr = frame->Commit();
+    if (SUCCEEDED(hr)) hr = enc->Commit();
+    return SUCCEEDED(hr);
+}
+
+void D3D12Backend::TitleBgSaveSample(ID3D12Resource* rb, const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp, uint32_t w,
+                                     uint32_t h) {
+    if (!title_bg_.active || !rb || !w || !h) return;
+    uint8_t* p = nullptr;
+    if (FAILED(rb->Map(0, nullptr, reinterpret_cast<void**>(&p))) || !p) {
+        LOGE("F9: map failed");
+        return;
+    }
+    std::vector<uint8_t> full(size_t(w) * h * 4);
+    for (uint32_t y = 0; y < h; y++)
+        std::memcpy(full.data() + size_t(y) * w * 4, p + size_t(y) * fp.Footprint.RowPitch, size_t(w) * 4);
+    rb->Unmap(0, nullptr);
+
+    constexpr uint32_t kMaxW = 960;
+    uint32_t dw = w, dh = h;
+    if (dw > kMaxW) {
+        dh = uint32_t(uint64_t(h) * kMaxW / w);
+        dw = kMaxW;
+    }
+    std::vector<uint8_t> scaled;
+    if (dw != w || dh != h)
+        DownscaleBgra(full.data(), w, h, w * 4, dw, dh, scaled);
+    else
+        scaled = std::move(full);
+
+    wchar_t name[64];
+    swprintf(name, 64, L"frame_%04d.jpg", title_bg_.frame);
+    auto path = title_bg_.dir / name;
+    if (!WriteTitleBgJpeg(path, dw, dh, scaled.data())) {
+        LOGE("F9: jpeg write failed %s", path.string().c_str());
+        title_bg_.active = false;
+        return;
+    }
+    title_bg_.frame++;
+    if (title_bg_.frame >= title_bg_.target) {
+        auto meta = title_bg_.dir / "meta.txt";
+        FILE* f = _wfopen(meta.c_str(), L"wb");
+        if (f) {
+            fprintf(f, "fps=%d\ncount=%d\nwidth=%u\nheight=%u\nseconds=%.1f\n", title_bg_.fps, title_bg_.frame, dw, dh,
+                    title_bg_.seconds);
+            fclose(f);
+        }
+        LOGI("F9: title clip done — %d frames in %s", title_bg_.frame, title_bg_.dir.string().c_str());
+        title_bg_.active = false;
+        MessageBeep(MB_OK);
+    }
 }
 
 // the slot is not reused before the caller's wait: the title runs at most one present ahead

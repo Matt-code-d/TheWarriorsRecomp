@@ -51,12 +51,68 @@ void Load() {
     // 0 = uncapped, 1 = monitor refresh, else clamp to a sane cap (dt hooks keep PAL speed).
     if (s.fps_cap > 240 && s.fps_cap != kFpsCapRefresh) s.fps_cap = 240;
     s.vsync = t["vsync"].value_or(s.vsync);
-    s.fsr = std::min(t["fsr"].value_or(s.fsr), 4u);
     s.aniso = t["anisotropic_filtering"].value_or(s.aniso);
     s.custom_textures = t["custom_textures"].value_or(s.custom_textures);
     s.dump_textures = t["dump_textures"].value_or(s.dump_textures);
     s.texture_dump_format = std::min(t["texture_dump_format"].value_or(s.texture_dump_format), 1u);
     s.join_ip = t["join_ip"].value_or(s.join_ip);
+    s.upscaler = t["upscaler"].value_or(s.upscaler);
+    s.upscale_quality = t["upscale_quality"].value_or(s.upscale_quality);
+    s.frame_generation = t["frame_generation"].value_or(s.frame_generation);
+    s.dlss_preset = t["dlss_preset"].value_or(s.dlss_preset);
+    s.sharpness = std::min(t["sharpness"].value_or(s.sharpness), 100u);
+    s.perf_overlay = t["perf_overlay"].value_or(s.perf_overlay);
+    s.perf_overlay_scale = t["perf_overlay_scale"].value_or(s.perf_overlay_scale);
+    s.keyboard_controls = t["keyboard_controls"].value_or(s.keyboard_controls);
+    s.invert_camera_y = t["invert_camera_y"].value_or(s.invert_camera_y);
+    s.vibration = t["vibration"].value_or(s.vibration);
+
+    // Map reference-style upscaler/quality → FSR1 quality index. DLSS/XeSS need Streamline/XeSS
+    // runtime (not in this host yet) — fall back to FSR1 so render scale still helps.
+    auto quality_to_fsr = [](const std::string& q) -> uint32_t {
+        std::string k = q;
+        for (char& c : k)
+            if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+        for (char& c : k)
+            if (c == ' ' || c == '-') c = '_';
+        if (k == "native" || k == "dlaa" || k == "off") return 0;
+        if (k == "ultra_quality" || k == "ultraquality") return 1;
+        if (k == "quality") return 2;
+        if (k == "balanced") return 3;
+        if (k == "performance") return 4;
+        if (k == "ultra_performance" || k == "ultraperformance") return 4;
+        return 2;
+    };
+    {
+        std::string u = s.upscaler;
+        for (char& c : u)
+            if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+        bool has_upscaler = t.contains("upscaler");
+        bool has_legacy_fsr = t.contains("fsr");
+        if (has_upscaler) {
+            if (u == "off" || u.empty()) {
+                s.fsr = 0;
+            } else if (u == "fsr" || u == "fsr1") {
+                s.fsr = quality_to_fsr(s.upscale_quality);
+            } else {
+                // dlss / xess / unknown — spatial FSR1 stand-in until vendor SDKs are wired.
+                s.fsr = quality_to_fsr(s.upscale_quality);
+                LOGR("settings: upscaler='%s' not built into this host — using FSR 1.0 (quality=%s)",
+                     s.upscaler.c_str(), s.upscale_quality.c_str());
+            }
+        } else if (has_legacy_fsr) {
+            s.fsr = std::min(t["fsr"].value_or(s.fsr), 4u);
+            if (s.fsr) {
+                s.upscaler = "fsr";
+                static const char* qn[] = {"off", "ultra_quality", "quality", "balanced", "performance"};
+                s.upscale_quality = qn[std::min(s.fsr, 4u)];
+            }
+        }
+        if (s.frame_generation != "off" && !s.frame_generation.empty()) {
+            LOGR("settings: frame_generation='%s' is not available in this host yet",
+                 s.frame_generation.c_str());
+        }
+    }
     for (const Option& o : kGame.options) {
         if (o.flag) *o.flag = t[o.key].value_or(*o.flag);
         else *o.value = t[o.key].value_or(*o.value);
@@ -74,8 +130,18 @@ toml::table Table() {
                   {"render_percent", int64_t(s.render_percent)},
                   {"fps_cap", int64_t(s.fps_cap)},
                   {"vsync", s.vsync},
+                  {"upscaler", s.upscaler},
+                  {"upscale_quality", s.upscale_quality},
+                  {"frame_generation", s.frame_generation},
+                  {"dlss_preset", s.dlss_preset},
+                  {"sharpness", int64_t(s.sharpness)},
                   {"fsr", int64_t(s.fsr)},
                   {"anisotropic_filtering", int64_t(s.aniso)},
+                  {"perf_overlay", int64_t(s.perf_overlay)},
+                  {"perf_overlay_scale", int64_t(s.perf_overlay_scale)},
+                  {"keyboard_controls", s.keyboard_controls},
+                  {"invert_camera_y", s.invert_camera_y},
+                  {"vibration", s.vibration},
                   {"custom_textures", s.custom_textures},
                   {"dump_textures", s.dump_textures},
                   {"texture_dump_format", int64_t(s.texture_dump_format)},

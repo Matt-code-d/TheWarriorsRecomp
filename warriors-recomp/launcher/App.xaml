@@ -3,55 +3,62 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              StartupUri="MainWindow.xaml">
   <Application.Resources>
-    <!-- The Warriors: night asphalt, jersey yellow, vest red. Not purple, not cream. -->
-    <SolidColorBrush x:Key="Bg" Color="#070708"/>
-    <SolidColorBrush x:Key="Panel" Color="#121214"/>
-    <SolidColorBrush x:Key="Side" Color="#0A0A0C"/>
-    <SolidColorBrush x:Key="Line" Color="#2C2C30"/>
+    <!-- Warriors locked: VestRed / Jersey / MenuIdle. Rest = asphalt dust only (no tan, no mint). -->
+    <SolidColorBrush x:Key="Bg" Color="#0B0B0C"/>
+    <SolidColorBrush x:Key="Panel" Color="#141416"/>
+    <SolidColorBrush x:Key="Side" Color="#09090A"/>
+    <SolidColorBrush x:Key="Line" Color="#2A2A2E"/>
+    <SolidColorBrush x:Key="Field" Color="#121214"/>
+    <SolidColorBrush x:Key="FieldEdge" Color="#3A3A40"/>
     <SolidColorBrush x:Key="Bone" Color="#F2F0EA"/>
-    <SolidColorBrush x:Key="Mute" Color="#8B8680"/>
+    <SolidColorBrush x:Key="Mute" Color="#7A7670"/>
+    <SolidColorBrush x:Key="Label" Color="#A39E96"/>
     <SolidColorBrush x:Key="Jersey" Color="#FFD100"/>
     <SolidColorBrush x:Key="JerseyHot" Color="#FFE566"/>
     <SolidColorBrush x:Key="JerseyDim" Color="#5C4A00"/>
     <SolidColorBrush x:Key="VestRed" Color="#C8102E"/>
-    <SolidColorBrush x:Key="VestRedDim" Color="#6B0A18"/>
+    <SolidColorBrush x:Key="VestRedDim" Color="#6B1218"/>
+    <SolidColorBrush x:Key="MenuIdle" Color="#8B1C24"/>
+    <SolidColorBrush x:Key="MenuActive" Color="#FFFFFF"/>
     <SolidColorBrush x:Key="Ink" Color="#0A0A0A"/>
-    <!-- aliases used by older markup -->
     <SolidColorBrush x:Key="Brass" Color="#FFD100"/>
     <SolidColorBrush x:Key="BrassDim" Color="#5C4A00"/>
+    <SolidColorBrush x:Key="Ready" Color="#C8102E"/>
+
+    <!-- Body UI: readable system face. Custom athletic face ONLY on sidebar nav (MenuFont). -->
+    <FontFamily x:Key="UiFont">Segoe UI, Bahnschrift, Arial</FontFamily>
+    <FontFamily x:Key="MenuFont">Segoe UI</FontFamily>
 
     <Style TargetType="Window">
       <Setter Property="Background" Value="{StaticResource Bg}"/>
       <Setter Property="Foreground" Value="{StaticResource Bone}"/>
-      <Setter Property="FontFamily" Value="Bahnschrift, Segoe UI"/>
+      <Setter Property="FontFamily" Value="{DynamicResource UiFont}"/>
       <Setter Property="FontSize" Value="14"/>
     </Style>
 
+    <!-- Title-menu style: idle dark red, active pure white. NBA font only here. -->
     <Style x:Key="NavBtn" TargetType="Button">
       <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="Foreground" Value="{StaticResource Mute}"/>
+      <Setter Property="Foreground" Value="{StaticResource MenuIdle}"/>
       <Setter Property="BorderThickness" Value="0"/>
-      <Setter Property="Padding" Value="18,14"/>
+      <Setter Property="Padding" Value="22,12"/>
       <Setter Property="HorizontalContentAlignment" Value="Left"/>
-      <Setter Property="FontSize" Value="13"/>
-      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="FontSize" Value="18"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="FontFamily" Value="{DynamicResource MenuFont}"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"
-                    BorderBrush="{StaticResource Jersey}" BorderThickness="0">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
               <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="#16140C"/>
-                <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
+                <Setter Property="Foreground" Value="#E8E4DC"/>
               </Trigger>
               <Trigger Property="Tag" Value="active">
-                <Setter TargetName="bd" Property="BorderThickness" Value="3,0,0,0"/>
-                <Setter TargetName="bd" Property="Background" Value="#1A1608"/>
-                <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
+                <Setter Property="Foreground" Value="{StaticResource MenuActive}"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -60,12 +67,13 @@
     </Style>
 
     <Style x:Key="PrimaryBtn" TargetType="Button">
-      <Setter Property="Background" Value="{StaticResource Jersey}"/>
-      <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+      <Setter Property="Background" Value="{StaticResource VestRed}"/>
+      <Setter Property="Foreground" Value="White"/>
       <Setter Property="BorderThickness" Value="0"/>
-      <Setter Property="Padding" Value="28,14"/>
-      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="Padding" Value="32,14"/>
+      <Setter Property="FontSize" Value="18"/>
       <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="FontFamily" Value="{DynamicResource UiFont}"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -75,7 +83,7 @@
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{StaticResource JerseyHot}"/>
+                <Setter TargetName="bd" Property="Background" Value="#E01830"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="bd" Property="Background" Value="#2A2A2E"/>
@@ -88,21 +96,19 @@
     </Style>
 
     <Style x:Key="GhostBtn" TargetType="Button" BasedOn="{StaticResource PrimaryBtn}">
-      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Background" Value="#161618"/>
       <Setter Property="Foreground" Value="{StaticResource Bone}"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{StaticResource FieldEdge}"
                     BorderThickness="1" Padding="{TemplateBinding Padding}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Jersey}"/>
-                <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource VestRed}"/>
+                <Setter Property="Foreground" Value="White"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -111,53 +117,104 @@
     </Style>
 
     <Style TargetType="TextBox">
-      <Setter Property="Background" Value="#0C0C0E"/>
+      <Setter Property="Background" Value="{StaticResource Field}"/>
       <Setter Property="Foreground" Value="{StaticResource Bone}"/>
-      <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource FieldEdge}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Padding" Value="10,8"/>
-      <Setter Property="CaretBrush" Value="{StaticResource Jersey}"/>
+      <Setter Property="CaretBrush" Value="{StaticResource VestRed}"/>
+      <Setter Property="FontFamily" Value="{DynamicResource UiFont}"/>
     </Style>
 
+    <!-- Dark combo — asphalt fields, vest-red hover (no tan chrome). -->
+    <ControlTemplate x:Key="DarkComboToggle" TargetType="ToggleButton">
+      <Grid>
+        <Border x:Name="bd" Background="{StaticResource Panel}" BorderBrush="{StaticResource FieldEdge}" BorderThickness="1"/>
+        <Border HorizontalAlignment="Right" Width="28" Background="#161618" BorderBrush="{StaticResource FieldEdge}" BorderThickness="1,0,0,0">
+          <Path Data="M 0,0 L 6,6 L 12,0 Z" Fill="{StaticResource Mute}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Border>
+      </Grid>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource VestRed}"/>
+        </Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate>
     <Style TargetType="ComboBox">
-      <Setter Property="Background" Value="#0C0C0E"/>
+      <Setter Property="Background" Value="{StaticResource Panel}"/>
       <Setter Property="Foreground" Value="{StaticResource Bone}"/>
-      <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
-      <Setter Property="Padding" Value="8,6"/>
-      <Setter Property="MinHeight" Value="32"/>
+      <Setter Property="BorderBrush" Value="{StaticResource FieldEdge}"/>
+      <Setter Property="Padding" Value="10,6"/>
+      <Setter Property="MinHeight" Value="34"/>
+      <Setter Property="FontFamily" Value="{DynamicResource UiFont}"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBox">
+            <Grid>
+              <ToggleButton Template="{StaticResource DarkComboToggle}" Focusable="False"
+                            IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                            ClickMode="Press"/>
+              <ContentPresenter Margin="10,0,32,0" VerticalAlignment="Center" HorizontalAlignment="Left"
+                                Content="{TemplateBinding SelectionBoxItem}"
+                                ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                IsHitTestVisible="False"/>
+              <Popup IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
+                <Border Background="{StaticResource Field}" BorderBrush="{StaticResource FieldEdge}" BorderThickness="1" MinWidth="{TemplateBinding ActualWidth}" MaxHeight="280">
+                  <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
+                  </ScrollViewer>
+                </Border>
+              </Popup>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
     <Style TargetType="ComboBoxItem">
       <Setter Property="Foreground" Value="{StaticResource Bone}"/>
-      <Setter Property="Background" Value="#121214"/>
-      <Setter Property="Padding" Value="8,6"/>
-      <Style.Triggers>
-        <Trigger Property="IsHighlighted" Value="True">
-          <Setter Property="Background" Value="#2A2208"/>
-          <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
-        </Trigger>
-        <Trigger Property="IsSelected" Value="True">
-          <Setter Property="Background" Value="#3A2E00"/>
-          <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
-        </Trigger>
-      </Style.Triggers>
+      <Setter Property="Background" Value="{StaticResource Field}"/>
+      <Setter Property="Padding" Value="10,7"/>
+      <Setter Property="FontFamily" Value="{DynamicResource UiFont}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBoxItem">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+              <ContentPresenter/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="#241014"/>
+                <Setter Property="Foreground" Value="White"/>
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="#32141A"/>
+                <Setter Property="Foreground" Value="White"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
 
     <Style TargetType="CheckBox">
       <Setter Property="Foreground" Value="{StaticResource Bone}"/>
       <Setter Property="Margin" Value="0,6,0,6"/>
+      <Setter Property="FontFamily" Value="{DynamicResource UiFont}"/>
     </Style>
 
     <Style TargetType="ProgressBar">
-      <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
+      <Setter Property="Foreground" Value="{StaticResource VestRed}"/>
       <Setter Property="Background" Value="#1A1A1E"/>
       <Setter Property="BorderThickness" Value="0"/>
     </Style>
 
     <Style x:Key="SectionTitle" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="26"/>
+      <Setter Property="FontSize" Value="28"/>
       <Setter Property="FontWeight" Value="Bold"/>
-      <Setter Property="Foreground" Value="{StaticResource Jersey}"/>
-      <Setter Property="Margin" Value="0,0,0,6"/>
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="FontFamily" Value="{DynamicResource UiFont}"/>
+      <Setter Property="Margin" Value="0,0,0,4"/>
     </Style>
 
     <Style x:Key="SectionSub" TargetType="TextBlock">
@@ -165,13 +222,16 @@
       <Setter Property="Foreground" Value="{StaticResource Mute}"/>
       <Setter Property="Margin" Value="0,0,0,18"/>
       <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="FontFamily" Value="{DynamicResource UiFont}"/>
     </Style>
 
     <Style x:Key="FieldLabel" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="{StaticResource VestRed}"/>
-      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Foreground" Value="{StaticResource Label}"/>
+      <Setter Property="FontSize" Value="12"/>
       <Setter Property="FontWeight" Value="Bold"/>
       <Setter Property="Margin" Value="0,0,0,4"/>
+      <Setter Property="FontFamily" Value="{DynamicResource UiFont}"/>
     </Style>
+
   </Application.Resources>
 </Application>

@@ -13,7 +13,9 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstring>
 #include <cwchar>
+#include <filesystem>
 #include <thread>
 
 #include <imgui.h>
@@ -121,6 +123,25 @@ void ApplyNow() {
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    // Host hotkeys before ImGui / game so F9 is never swallowed (D3D flip BitBlt is black — GPU path handles it).
+    if (msg == WM_KEYDOWN) {
+        if (wp == VK_F3) {
+            DumpThreads();
+            return 0;
+        }
+        if (wp == VK_F9) {
+            gpu::g_title_bg.store(true);
+            LOGI("F9: title background capture requested");
+            return 0;
+        }
+        if (wp == VK_F10) {
+            auto& s = Get();
+            s.perf_overlay = s.perf_overlay ? 0u : 1u;
+            Save();
+            LOGI("F10: perf_overlay=%u", s.perf_overlay);
+            return 0;
+        }
+    }
     {
         std::lock_guard lock(UiLock());
         if (ImGui::GetCurrentContext() && ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp)) return 1;
@@ -128,7 +149,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (intptr_t result = 0; kGame.message && kGame.message(hwnd, msg, wp, lp, &result)) return result;
     switch (msg) {
         case WM_KEYDOWN:
-            if (wp == VK_F3) DumpThreads();
             return 0;
         case WM_ACTIVATE:
             if (LOWORD(wp) == WA_INACTIVE) {

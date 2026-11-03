@@ -39,8 +39,27 @@ public sealed class LauncherSettings
     /// <summary>Render scale percent of output height (25–200).</summary>
     public uint RenderPercent { get; set; } = 100;
 
-    /// <summary>0 off, 1 ultra quality, 2 quality, 3 balanced, 4 performance (FSR 1.0).</summary>
-    public uint Fsr { get; set; }
+    /// <summary>off | fsr | dlss | xess — matches reference Warriors Xbox Recomp schema.</summary>
+    public string Upscaler { get; set; } = "off";
+
+    /// <summary>native | ultra_quality | quality | balanced | performance | ultra_performance</summary>
+    public string UpscaleQuality { get; set; } = "quality";
+
+    /// <summary>off | fsr | dlss — frame gen not in our host yet; still written for compatibility.</summary>
+    public string FrameGeneration { get; set; } = "off";
+
+    public string DlssPreset { get; set; } = "default";
+
+    /// <summary>0–100 RCAS / upscaler sharpness.</summary>
+    public uint Sharpness { get; set; } = 20;
+
+    public uint PerfOverlay { get; set; }
+
+    public bool KeyboardControls { get; set; } = true;
+
+    public bool InvertCameraY { get; set; }
+
+    public bool Vibration { get; set; } = true;
 
     /// <summary>0 = as the game asks.</summary>
     public uint Anisotropic { get; set; }
@@ -51,6 +70,39 @@ public sealed class LauncherSettings
 
     /// <summary>d3d12 (only backend today) or vulkan (reserved — not built yet).</summary>
     public string GraphicsApi { get; set; } = "d3d12";
+
+    /// <summary>Legacy FSR1 index derived from Upscaler + UpscaleQuality (also written as <c>fsr</c>).</summary>
+    public uint Fsr => DeriveFsr(Upscaler, UpscaleQuality);
+
+    public static uint DeriveFsr(string upscaler, string quality)
+    {
+        var u = (upscaler ?? "off").Trim().ToLowerInvariant();
+        if (u is "off" or "") return 0;
+        // fsr / dlss / xess — host currently implements spatial FSR1 for all of these
+        var q = (quality ?? "quality").Trim().ToLowerInvariant().Replace(' ', '_').Replace('-', '_');
+        return q switch
+        {
+            "native" or "dlaa" or "off" => 0,
+            "ultra_quality" or "ultraquality" => 1,
+            "quality" => 2,
+            "balanced" => 3,
+            "performance" => 4,
+            "ultra_performance" or "ultraperformance" => 4,
+            _ => 2,
+        };
+    }
+
+    public static uint SuggestedRenderPercent(string quality) =>
+        (quality ?? "").Trim().ToLowerInvariant().Replace(' ', '_').Replace('-', '_') switch
+        {
+            "ultra_quality" or "ultraquality" => 77u,
+            "quality" => 67u,
+            "balanced" => 59u,
+            "performance" => 50u,
+            "ultra_performance" or "ultraperformance" => 33u,
+            "native" or "dlaa" => 100u,
+            _ => 100u,
+        };
 
     public static string DefaultPath()
     {
@@ -90,7 +142,8 @@ public sealed class LauncherSettings
         PortRoot = Paths.FindPortRoot(projectRoot);
 
         var besideExe = Path.Combine(PortRoot, "assets");
-        var releaseAssets = Path.Combine(projectRoot, "out", "build", "release", "assets");
+        var releaseAssets = Path.Combine(projectRoot, "out", "build", "release");
+        releaseAssets = Path.Combine(releaseAssets, "assets");
         AssetsRoot = PickAssetsRoot(AssetsRoot, besideExe, releaseAssets);
         Directory.CreateDirectory(AssetsRoot);
 

@@ -38,6 +38,13 @@ Written / maintained here for the EUR bring-up (not an exhaustive list):
 *The Warriors* remains © Rockstar / Take-Two (and related rights holders).  
 This project is unofficial and unaffiliated. **No ISO, XBE, or game assets ship in this repository or in public release zips.** Bring your own legally owned European dump.
 
+## Attribution (required)
+
+- Keep credits to **Matteo Santoro (Matt-code-d)** for the EUR bring-up and WPF launcher (About UI, this file, LICENSES.md).
+- Do not strip or rebrand the launcher as original work elsewhere without that credit and a clear link to this repository.
+- Do not remove TGP482 / XboxXBERecomp (and other third-party) credits when you reuse runtime pieces.
+- AI-assisted edits and commits must preserve the same attribution; removing credits is not an acceptable “cleanup.”
+
 ## How to contribute
 
 Issues and PRs on GitHub are welcome for host bugs, launcher UX, docs, and EUR edge cases.  

@@ -30,6 +30,38 @@ if exist ..\port (
   if not exist ..\port\fsr mkdir ..\port\fsr
   copy /Y out\build\release\fsr\*.* ..\port\fsr\ >nul
 )
+rem Vendor upscaler / FG DLLs from the reference Warriors Xbox Recomp drop (if present).
+set "REFUPS=..\otherrepos\Warriors Xbox Recomp"
+if exist "%REFUPS%\amd_fidelityfx_upscaler_dx12.dll" (
+  echo === sync upscaler DLLs from reference ===
+  for %%D in (
+    amd_fidelityfx_framegeneration_dx12.dll
+    amd_fidelityfx_loader_dx12.dll
+    amd_fidelityfx_upscaler_dx12.dll
+    libxess.dll
+    libxess_dx11.dll
+    nvngx_dlss.dll
+    nvngx_dlssg.dll
+    sl.common.dll
+    sl.dlss_g.dll
+    sl.interposer.dll
+    sl.pcl.dll
+    sl.reflex.dll
+  ) do (
+    if exist "%REFUPS%\%%D" (
+      copy /Y "%REFUPS%\%%D" out\build\release\ >nul
+      if exist ..\port copy /Y "%REFUPS%\%%D" ..\port\ >nul
+    )
+  )
+  if exist "%REFUPS%\licenses" (
+    if not exist out\build\release\licenses mkdir out\build\release\licenses
+    copy /Y "%REFUPS%\licenses\*" out\build\release\licenses\ >nul
+    if exist ..\port (
+      if not exist ..\port\licenses mkdir ..\port\licenses
+      copy /Y "%REFUPS%\licenses\*" ..\port\licenses\ >nul
+    )
+  )
+)
 echo === done ===
 dir out\build\release\Warriors.exe out\build\release\Warriors.dll out\build\release\WarriorsLauncher.exe
 exit /b 0

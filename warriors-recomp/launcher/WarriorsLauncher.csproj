@@ -18,5 +18,26 @@
   </ItemGroup>
   <ItemGroup>
     <Resource Include="Assets\thewarriorsrecompmin.png" />
+    <Resource Include="Assets\thewarriorsrecomp.png" Condition="Exists('Assets\thewarriorsrecomp.png')" />
+    <!-- Obfuscated UI face (deflate+XOR). Raw TTF is never packaged. -->
+    <EmbeddedResource Include="Assets\chrome.bin" LogicalName="WarriorsLauncher.Assets.chrome.bin" />
+    <!-- Obfuscated About credit bodies (deflate+XOR). -->
+    <EmbeddedResource Include="Assets\notice.bin" LogicalName="WarriorsLauncher.Assets.notice.bin" />
+    <!-- Packed HOME title clip (TWB1 JPEGs, deflate+XOR). -->
+    <EmbeddedResource Include="Assets\title_bg.bin" LogicalName="WarriorsLauncher.Assets.title_bg.bin"
+                      Condition="Exists('Assets\title_bg.bin')" />
   </ItemGroup>
+  <!-- If Nba Warriors.zip is present at repo root, refresh chrome.bin before build. -->
+  <Target Name="PackUiChrome" BeforeTargets="BeforeBuild">
+    <PropertyGroup>
+      <NbaZip>$(MSBuildProjectDirectory)\..\..\Nba Warriors.zip</NbaZip>
+      <ChromeOut>$(MSBuildProjectDirectory)\Assets\chrome.bin</ChromeOut>
+      <TitleBgSrc>$(MSBuildProjectDirectory)\..\out\build\release\launcher_title_bg</TitleBgSrc>
+      <TitleBgOut>$(MSBuildProjectDirectory)\Assets\title_bg.bin</TitleBgOut>
+    </PropertyGroup>
+    <Exec Condition="Exists('$(NbaZip)')"
+          Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\tools\pack_ui_chrome.ps1&quot; -Zip &quot;$(NbaZip)&quot; -Out &quot;$(ChromeOut)&quot;" />
+    <Exec Condition="Exists('$(TitleBgSrc)\meta.txt') and !Exists('$(TitleBgOut)')"
+          Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\tools\pack_title_bg.ps1&quot; -SrcDir &quot;$(TitleBgSrc)&quot; -Out &quot;$(TitleBgOut)&quot;" />
+  </Target>
 </Project>

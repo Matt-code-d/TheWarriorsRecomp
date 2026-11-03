@@ -27,7 +27,19 @@ struct Settings {
     bool vsync = true;
     // FSR 1.0 present upscale: 0 off, 1 ultra quality, 2 quality, 3 balanced, 4 performance.
     // When on, BlitFrame uses EASU+RCAS instead of bilinear (pair with render_percent < 100).
+    // Derived from upscaler + upscale_quality (reference schema) or legacy `fsr` key.
     uint32_t fsr = 0;
+    // Compatible with the public Warriors Xbox Recomp settings.toml schema.
+    std::string upscaler = "off";          // off | fsr | dlss | xess
+    std::string upscale_quality = "quality";  // native | quality | balanced | performance | ultra_performance | …
+    std::string frame_generation = "off";  // off | fsr | dlss — host support TBD
+    std::string dlss_preset = "default";
+    uint32_t sharpness = 20;               // 0–100 → RCAS stops (value/100)
+    uint32_t perf_overlay = 0;
+    uint32_t perf_overlay_scale = 0;
+    bool keyboard_controls = true;
+    bool invert_camera_y = false;
+    bool vibration = true;
     uint32_t aniso = 0;              // 0 as the game asks
     bool custom_textures = true;     // images in textures\replacement\ beside the exe replace the game's
     bool dump_textures = false;      // each texture once into textures\dumps\ beside the exe

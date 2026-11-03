@@ -64,6 +64,10 @@ tools/*.png
 # Local font kits / scratch archives (not redistributed)
 helvetica-neue-condensed-bold.zip
 mersey_cowboy.zip
+Nba Warriors.zip
+**/_nba_font_extract/
+*.ttf
+*.otf
 *.iso
 
 # Nested clone metadata — EUR patches live in-tree under warriors-recomp/sdk/

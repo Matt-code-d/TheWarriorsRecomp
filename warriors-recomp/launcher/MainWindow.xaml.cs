@@ -57,6 +57,7 @@ public partial class MainWindow : Window
         };
 
         TxtIso.Text = _settings.IsoPath;
+        TxtIsoHome.Text = _settings.IsoPath;
         FillCombos();
         SyncUiFromSettings();
         // Keep saved game language (launcher UI follows it). OS pick only when browsing a new ISO.
@@ -70,8 +71,10 @@ public partial class MainWindow : Window
             if (!FontVault.LoadedOk)
                 TxtPlayMsg.Text = "Font pack failed: " + FontVault.Status;
             LoadTitleBgClip();
+            ApplySetupGate();
         };
         _uiReady = true;
+        ApplySetupGate();
     }
 
     /// <summary>Entire launcher chrome follows the selected game language (EUR XC_LANGUAGE).</summary>
@@ -91,6 +94,12 @@ public partial class MainWindow : Window
 
         LblHomeQuick.Text = t.QuickSettings;
         LblHomeSub.Text = t.HomeSub;
+        LblHomeSetup.Text = t.FirstSetup;
+        LblHomeSetupSub.Text = t.FirstSetupSub;
+        LblHomeIsoPath.Text = t.DiscImage;
+        BtnBrowseIsoHome.Content = t.BrowseIso;
+        BtnInstallHome.Content = t.Install;
+        ChkExtractHome.Content = t.ExtractAlso;
         LblHomeDisplay.Text = t.DisplayMode;
         LblHomeWindow.Text = t.WindowSize;
         LblHomeRender.Text = t.RenderResolution;
@@ -175,6 +184,43 @@ public partial class MainWindow : Window
 
         FillCombos();
         SyncUiFromSettings();
+        ApplySetupGate();
+    }
+
+    private bool IsSetupComplete()
+    {
+        _settings.EnsureDefaults(_projectRoot);
+        return GameProcess.IsGameInstalled(_settings);
+    }
+
+    /// <summary>
+    /// Before assets exist: HOME shows FIRST SETUP, settings tabs/controls and PLAY stay locked.
+    /// </summary>
+    private void ApplySetupGate()
+    {
+        bool ready = IsSetupComplete();
+        HomeSetupDock.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
+        HomeQuickDock.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
+
+        NavVideo.IsEnabled = ready;
+        NavControls.IsEnabled = ready;
+        NavAdvanced.IsEnabled = ready;
+        NavVideo.Opacity = ready ? 1 : 0.35;
+        NavControls.Opacity = ready ? 1 : 0.35;
+        NavAdvanced.Opacity = ready ? 1 : 0.35;
+
+        PanelVideo.IsEnabled = ready;
+        PanelControls.IsEnabled = ready;
+        PanelAdvanced.IsEnabled = ready;
+        // GAME stays usable so language / reinstall remain available; lock only graphics-ish bits via nav.
+
+        BtnSave.IsEnabled = ready;
+        BtnSave.Opacity = ready ? 1 : 0.45;
+
+        if (!ready && (_panels["VIDEO"].Visibility == Visibility.Visible
+                       || _panels["CONTROLS"].Visibility == Visibility.Visible
+                       || _panels["ADVANCED"].Visibility == Visibility.Visible))
+            ShowPanel("HOME");
     }
 
     private void FillCombos()
@@ -529,6 +575,8 @@ public partial class MainWindow : Window
         else if (b == NavGame) key = "GAME";
         else if (b == NavAdvanced) key = "ADVANCED";
         else if (b == NavAbout) key = "ABOUT";
+        if (!IsSetupComplete() && key is "VIDEO" or "CONTROLS" or "ADVANCED")
+            key = "HOME";
         ShowPanel(key);
     }
 
@@ -552,13 +600,20 @@ public partial class MainWindow : Window
         StatusLang.Text = lang != null
             ? $"{t.StatusLanguage}: {lang.DisplayName}"
             : $"{t.StatusLanguage} id {_settings.UserLanguage}";
-        bool ready = File.Exists(exe);
+        bool installed = GameProcess.IsGameInstalled(_settings);
+        bool ready = File.Exists(exe) && installed;
         BtnPlay.IsEnabled = ready;
         BtnPlay.Opacity = ready ? 1 : 0.45;
-        TxtReady.Text = ready ? t.Ready : t.ReadyMissing;
+        if (!File.Exists(exe))
+            TxtReady.Text = t.ReadyMissing;
+        else if (!installed)
+            TxtReady.Text = t.ReadyNeedSetup;
+        else
+            TxtReady.Text = t.Ready;
         TxtReady.Foreground = ready
             ? (Brush)FindResource("Bone")
             : (Brush)FindResource("Mute");
+        ApplySetupGate();
     }
 
     private void RescanLanguages(bool preferOs)
@@ -604,6 +659,20 @@ public partial class MainWindow : Window
 
     private void RescanLang_Click(object sender, RoutedEventArgs e) => RescanLanguages(preferOs: false);
 
+    private void SyncIsoFields(string path)
+    {
+        TxtIso.Text = path;
+        TxtIsoHome.Text = path;
+    }
+
+    private void SetInstallUi(double fraction, string text)
+    {
+        BarInstall.Value = fraction;
+        BarInstallHome.Value = fraction;
+        TxtInstallDetail.Text = text;
+        TxtInstallDetailHome.Text = text;
+    }
+
     private void BrowseIso_Click(object sender, RoutedEventArgs e)
     {
         var t = LauncherText.ForLanguageId(_settings.UserLanguage);
@@ -615,7 +684,7 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(_settings.IsoPath) && File.Exists(_settings.IsoPath))
             dlg.InitialDirectory = Path.GetDirectoryName(_settings.IsoPath);
         if (dlg.ShowDialog() != true) return;
-        TxtIso.Text = dlg.FileName;
+        SyncIsoFields(dlg.FileName);
         _settings.IsoPath = dlg.FileName;
         _settings.Save();
         RescanLanguages(preferOs: true);
@@ -623,27 +692,31 @@ public partial class MainWindow : Window
 
     private async void Install_Click(object sender, RoutedEventArgs e)
     {
-        var iso = TxtIso.Text.Trim();
+        var iso = TxtIsoHome.Text.Trim();
+        if (string.IsNullOrWhiteSpace(iso))
+            iso = TxtIso.Text.Trim();
         if (!File.Exists(iso))
         {
-            TxtInstallDetail.Text = "Pick a valid .iso first.";
+            SetInstallUi(0, "Pick a valid .iso first.");
             return;
         }
 
+        SyncIsoFields(iso);
         _settings.IsoPath = iso;
         _settings.EnsureDefaults(_projectRoot);
         _installCts?.Cancel();
         _installCts = new CancellationTokenSource();
         BtnInstall.IsEnabled = false;
-        BarInstall.Value = 0;
-        TxtInstallDetail.Text = "Starting…";
+        BtnInstallHome.IsEnabled = false;
+        SetInstallUi(0, "Starting…");
 
+        bool extract = ChkExtractHome.IsChecked == true || ChkExtract.IsChecked == true;
         var progress = new Progress<IsoInstallProgress>(p =>
         {
-            BarInstall.Value = p.Fraction < 0 ? 0 : p.Fraction;
-            TxtInstallDetail.Text = string.IsNullOrWhiteSpace(p.Detail)
+            var detail = string.IsNullOrWhiteSpace(p.Detail)
                 ? p.Phase
                 : $"{p.Phase}: {p.Detail}";
+            SetInstallUi(p.Fraction < 0 ? 0 : p.Fraction, detail);
         });
 
         try
@@ -652,7 +725,7 @@ public partial class MainWindow : Window
             await installer.InstallIsoIntoAssetsAsync(
                 iso,
                 _settings.AssetsRoot,
-                ChkExtract.IsChecked == true,
+                extract,
                 Paths.FindExtractXiso(_projectRoot),
                 progress,
                 _installCts.Token);
@@ -660,16 +733,18 @@ public partial class MainWindow : Window
             _settings.Save();
             RescanLanguages(preferOs: false);
             RefreshStatus();
-            TxtInstallDetail.Text = "Done. Press PLAY — first launch compiles the game DLL.";
+            SetInstallUi(1, "Done. Press PLAY — first launch compiles the game DLL.");
             ShowPanel("HOME");
+            ApplySetupGate();
         }
         catch (Exception ex)
         {
-            TxtInstallDetail.Text = ex.Message;
+            SetInstallUi(0, ex.Message);
         }
         finally
         {
             BtnInstall.IsEnabled = true;
+            BtnInstallHome.IsEnabled = true;
         }
     }
 

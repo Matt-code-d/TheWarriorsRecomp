@@ -63,4 +63,20 @@ public static class GameProcess
             return $"Disc image: {isos[0]}";
         return "Extracted files (default.xbe)";
     }
+
+    /// <summary>True when assets has a playable dump (ISO and/or default.xbe).</summary>
+    public static bool IsGameInstalled(LauncherSettings settings)
+    {
+        var assets = settings.AssetsRoot;
+        if (!Directory.Exists(assets)) return false;
+        if (File.Exists(Path.Combine(assets, "default.xbe"))) return true;
+        try
+        {
+            return Directory.EnumerateFiles(assets, "*.iso").Any();
+        }
+        catch
+        {
+            return false;
+        }
+    }
 }

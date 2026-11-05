@@ -13,6 +13,9 @@ public static class LauncherText
         public string NavAdvanced { get; init; } = "";
         public string NavAbout { get; init; } = "";
         public string QuickSettings { get; init; } = "";
+        public string FirstSetup { get; init; } = "";
+        public string FirstSetupSub { get; init; } = "";
+        public string ReadyNeedSetup { get; init; } = "";
         public string HomeSub { get; init; } = "";
         public string DisplayMode { get; init; } = "";
         public string WindowSize { get; init; } = "";
@@ -141,6 +144,9 @@ public static class LauncherText
         NavHome = "HOME", NavVideo = "VIDEO", NavControls = "CONTROLS",
         NavGame = "GAME", NavAdvanced = "ADVANCED", NavAbout = "ABOUT",
         QuickSettings = "QUICK SETTINGS",
+        FirstSetup = "FIRST SETUP",
+        FirstSetupSub = "Bring your own legally owned European disc image, then install it into assets. Settings unlock after that.",
+        ReadyNeedSetup = "Finish FIRST SETUP before you play.",
         HomeSub = "How the game is shown: the window, the 3D resolution and the frame rate.",
         DisplayMode = "Display mode", WindowSize = "Window size",
         RenderResolution = "Render resolution", FpsCounter = "FPS counter",
@@ -217,6 +223,9 @@ public static class LauncherText
         NavHome = "HOME", NavVideo = "VIDEO", NavControls = "COMANDI",
         NavGame = "GIOCO", NavAdvanced = "AVANZATE", NavAbout = "INFO",
         QuickSettings = "IMPOSTAZIONI RAPIDE",
+        FirstSetup = "PRIMO SETUP",
+        FirstSetupSub = "Porta la tua immagine disco EUR di proprietà legale, poi installala in assets. Le impostazioni si sbloccano dopo.",
+        ReadyNeedSetup = "Completa il PRIMO SETUP prima di giocare.",
         HomeSub = "Come viene mostrato il gioco: finestra, risoluzione 3D e frame rate.",
         DisplayMode = "Modalità display", WindowSize = "Dimensione finestra",
         RenderResolution = "Risoluzione render", FpsCounter = "Contatore FPS",
@@ -429,6 +438,9 @@ public static class LauncherText
             NavAdvanced = Nz(partial.NavAdvanced, e.NavAdvanced),
             NavAbout = Nz(partial.NavAbout, e.NavAbout),
             QuickSettings = Nz(partial.QuickSettings, e.QuickSettings),
+            FirstSetup = Nz(partial.FirstSetup, e.FirstSetup),
+            FirstSetupSub = Nz(partial.FirstSetupSub, e.FirstSetupSub),
+            ReadyNeedSetup = Nz(partial.ReadyNeedSetup, e.ReadyNeedSetup),
             HomeSub = Nz(partial.HomeSub, e.HomeSub),
             DisplayMode = Nz(partial.DisplayMode, e.DisplayMode),
             WindowSize = Nz(partial.WindowSize, e.WindowSize),

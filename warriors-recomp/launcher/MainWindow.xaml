@@ -44,12 +44,32 @@
 
     <Grid Grid.Column="1" Grid.Row="0" Margin="36,28,36,8">
 
-      <!-- HOME: F9 clip as Wonder Wheel-style bg + quick settings at bottom -->
+      <!-- HOME: title clip bg; first-setup OR quick settings -->
       <Grid x:Name="PanelHome" Visibility="Visible">
         <Image x:Name="ImgHomeBg" Stretch="UniformToFill" Opacity="0.42" IsHitTestVisible="False"
                RenderOptions.BitmapScalingMode="HighQuality"/>
         <Border Background="#990B0B0C" IsHitTestVisible="False"/>
-        <DockPanel LastChildFill="False">
+
+        <!-- First launch: install dump before any settings -->
+        <Border x:Name="HomeSetupDock" Background="#E00B0B0C" VerticalAlignment="Bottom" Margin="0,0,0,4" Padding="16,14"
+                Visibility="Collapsed">
+          <StackPanel>
+            <TextBlock x:Name="LblHomeSetup" Text="FIRST SETUP" Style="{StaticResource FieldLabel}" Margin="0,0,0,2"/>
+            <TextBlock x:Name="LblHomeSetupSub" Style="{StaticResource SectionSub}" Margin="0,0,0,12"
+                       Text="Bring your own legally owned European disc image, then install it into assets."/>
+            <TextBlock x:Name="LblHomeIsoPath" Style="{StaticResource FieldLabel}" Text="Disc image"/>
+            <TextBox x:Name="TxtIsoHome" Margin="0,0,0,8"/>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+              <Button x:Name="BtnBrowseIsoHome" Style="{StaticResource GhostBtn}" Content="Choose the ISO…" Padding="16,8" Click="BrowseIso_Click"/>
+              <Button x:Name="BtnInstallHome" Style="{StaticResource PrimaryBtn}" Content="Install into assets" Margin="10,0,0,0" Padding="16,8" Click="Install_Click"/>
+            </StackPanel>
+            <CheckBox x:Name="ChkExtractHome" Content="Also extract with extract-xiso (optional)" Margin="0,0,0,8"/>
+            <ProgressBar x:Name="BarInstallHome" Height="8" Margin="0,0,0,6" Minimum="0" Maximum="1" Value="0"/>
+            <TextBlock x:Name="TxtInstallDetailHome" Foreground="{StaticResource Mute}" FontSize="12" TextWrapping="Wrap"/>
+          </StackPanel>
+        </Border>
+
+        <DockPanel x:Name="HomeQuickDock" LastChildFill="False">
           <StackPanel DockPanel.Dock="Bottom" Margin="0,0,0,4"
                       Background="#E00B0B0C">
             <TextBlock x:Name="LblHomeQuick" Text="QUICK SETTINGS" Style="{StaticResource FieldLabel}" Margin="12,10,12,2"/>

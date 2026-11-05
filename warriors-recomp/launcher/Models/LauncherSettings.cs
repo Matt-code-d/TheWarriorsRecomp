@@ -141,21 +141,82 @@ public sealed class LauncherSettings
         // Always re-resolve: stale Documents JSON often still points at port\ (old NTSC zip).
         PortRoot = Paths.FindPortRoot(projectRoot);
 
-        var besideExe = Path.Combine(PortRoot, "assets");
-        var releaseAssets = Path.Combine(projectRoot, "out", "build", "release");
-        releaseAssets = Path.Combine(releaseAssets, "assets");
+        var besideExe = Path.GetFullPath(Path.Combine(PortRoot, "assets"));
+        var portFull = Path.GetFullPath(PortRoot);
+        var packaged = File.Exists(Path.Combine(PortRoot, "Warriors.exe")) &&
+                       PathsEqual(PortRoot, AppContext.BaseDirectory);
+
+        // Packaged / side-by-side zip: NEVER reuse Documents AssetsRoot/IsoPath from another install.
+        if (packaged)
+        {
+            AssetsRoot = besideExe;
+            Directory.CreateDirectory(AssetsRoot);
+            if (!IsoBelongsToInstall(IsoPath, portFull, AssetsRoot))
+                IsoPath = "";
+            // Only auto-fill ISO from THIS install's assets — never walk D:\Games or the repo.
+            if (string.IsNullOrWhiteSpace(IsoPath) || !File.Exists(IsoPath))
+                IsoPath = EnumerateIsos(AssetsRoot).FirstOrDefault() ?? "";
+            return;
+        }
+
+        var releaseAssets = Path.Combine(projectRoot, "out", "build", "release", "assets");
+        // Drop JSON AssetsRoot that points outside this PortRoot (other test folders / old port).
+        if (!string.IsNullOrWhiteSpace(AssetsRoot))
+        {
+            try
+            {
+                var cur = Path.GetFullPath(AssetsRoot);
+                if (!cur.StartsWith(portFull, StringComparison.OrdinalIgnoreCase) &&
+                    !cur.StartsWith(Path.GetFullPath(projectRoot), StringComparison.OrdinalIgnoreCase))
+                    AssetsRoot = besideExe;
+            }
+            catch
+            {
+                AssetsRoot = besideExe;
+            }
+        }
+
         AssetsRoot = PickAssetsRoot(AssetsRoot, besideExe, releaseAssets);
         Directory.CreateDirectory(AssetsRoot);
 
-        if (string.IsNullOrWhiteSpace(IsoPath) || !File.Exists(IsoPath))
+        if (!IsoBelongsToInstall(IsoPath, portFull, AssetsRoot) || !File.Exists(IsoPath))
         {
-            var workspace = Path.GetDirectoryName(projectRoot) ?? projectRoot;
             var hit = EnumerateIsos(AssetsRoot)
                 .Concat(EnumerateIsos(besideExe))
-                .Concat(EnumerateIsos(projectRoot))
-                .Concat(EnumerateIsos(workspace))
                 .FirstOrDefault();
-            if (hit != null) IsoPath = hit;
+            IsoPath = hit ?? "";
+        }
+    }
+
+    static bool PathsEqual(string a, string b)
+    {
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    static bool IsoBelongsToInstall(string? isoPath, string portFull, string assetsRoot)
+    {
+        if (string.IsNullOrWhiteSpace(isoPath)) return false;
+        try
+        {
+            if (!File.Exists(isoPath)) return false;
+            var iso = Path.GetFullPath(isoPath);
+            if (iso.StartsWith(portFull, StringComparison.OrdinalIgnoreCase)) return true;
+            if (iso.StartsWith(Path.GetFullPath(assetsRoot), StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+        catch
+        {
+            return false;
         }
     }
 

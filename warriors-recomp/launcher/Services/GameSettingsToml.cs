@@ -50,15 +50,14 @@ public static class GameSettingsToml
             map["texture_dump_format"] = "0";
         if (!map.ContainsKey("join_ip"))
             map["join_ip"] = Quote("");
-        if (!map.ContainsKey("graphics_api"))
-            map["graphics_api"] = Quote(settings.GraphicsApi);
-        else
-            map["graphics_api"] = Quote(settings.GraphicsApi);
+        // Host is D3D12-only for now — never persist vulkan.
+        settings.GraphicsApi = "d3d12";
+        map["graphics_api"] = Quote("d3d12");
 
         var launcher = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["language"] = settings.UserLanguage.ToString(CultureInfo.InvariantCulture),
-            ["graphics_api"] = Quote(settings.GraphicsApi),
+            ["graphics_api"] = Quote("d3d12"),
         };
 
         File.WriteAllText(path, FormatToml(map, launcher), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
@@ -143,7 +142,12 @@ public static class GameSettingsToml
         var text = File.ReadAllText(path);
         var m = Regex.Match(text, @"graphics_api\s*=\s*""?(?<v>[^""\r\n]+)""?", RegexOptions.IgnoreCase);
         if (m.Success)
-            settings.GraphicsApi = Unquote(m.Groups["v"].Value.Trim());
+        {
+            var api = Unquote(m.Groups["v"].Value.Trim());
+            settings.GraphicsApi = string.Equals(api, "vulkan", StringComparison.OrdinalIgnoreCase) ? "d3d12" : api;
+        }
+        if (settings.GraphicsApi is not "d3d12")
+            settings.GraphicsApi = "d3d12";
     }
 
     static Dictionary<string, string> ParseFlat(string text)

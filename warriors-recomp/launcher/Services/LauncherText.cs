@@ -103,6 +103,13 @@ public static class LauncherText
         public string HintFps { get; init; } = "";
         public string HintFrameGen { get; init; } = "";
         public string HintDlss { get; init; } = "";
+        public string PresetSec { get; init; } = "";
+        public string Preset { get; init; } = "";
+        public string HintPreset { get; init; } = "";
+        public string BtnUseRecommended { get; init; } = "";
+        public string OptCustom { get; init; } = "";
+        public string GpuLine { get; init; } = "";
+        public string GpuLineUnknown { get; init; } = "";
         public string AdvVulkan { get; init; } = "";
         public string AdvVulkanBody { get; init; } = "";
         public string AdvFiles { get; init; } = "";
@@ -161,7 +168,7 @@ public static class LauncherText
         ControlsSub = "Keyboard, mouse and controller all work together; whichever you use answers.",
         General = "GENERAL", KeyboardMouse = "Keyboard and mouse",
         InvertY = "Invert camera Y", Vibration = "Vibration",
-        ControlsHint = "Full remapping ships in a later build. These flags are written to settings.toml.",
+        ControlsHint = "WASD move. Click to capture mouse look; F1 toggles, Esc releases (Esc is not Back — use Backspace). Space / Shift / E / F actions.",
         GameTitle = "GAME",
         GameSub = "Your copy of the game, its language and the launcher itself.",
         LanguageSec = "LANGUAGE",
@@ -197,15 +204,22 @@ public static class LauncherText
         HintBorderless = "Borderless fills the screen and switches instantly.",
         HintWindow = "Output size.",
         HintVSync = "Turn VSync off for rates above your monitor's.",
-        HintApi = "D3D12 native. Vulkan reserved.",
+        HintApi = "D3D12 only for now. Vulkan is disabled until it is wired.",
         HintRender = "The frame's height. Match the window = 100%.",
         HintUpscaler = "AMD FSR / DLSS / XeSS. This host runs FSR 1.0; others fall back until wired.",
         HintAniso = "Anisotropic filtering keeps far-off ground sharp.",
         HintFps = "The game runs every frame natively at this rate.",
         HintFrameGen = "Generated frames between the game's own. Not in this host yet.",
         HintDlss = "Which DLSS model runs.",
+        PresetSec = "GRAPHICS PRESET",
+        Preset = "Preset",
+        HintPreset = "Bundles upscaler, filmic and filtering for your GPU tier.",
+        BtnUseRecommended = "Use recommended",
+        OptCustom = "Custom",
+        GpuLine = "Detected: {0}{1} — tier {2} — recommended: {3}",
+        GpuLineUnknown = "GPU not detected — recommended: Balanced.",
         AdvVulkan = "VULKAN",
-        AdvVulkanBody = "Vulkan needs vkd3d-proton. This EUR host is D3D12-only for now; the Graphics API choice is saved for later.",
+        AdvVulkanBody = "Vulkan is disabled in this build. The host runs Direct3D 12 only; the API selector cannot switch.",
         AdvFiles = "FILES", AdvOpenLogs = "Open the logs folder", AdvOpenPort = "Open port folder",
         AdvUpscaler = "UPSCALER RUNTIME", AdvRefreshDll = "Refresh DLL status",
         AdvInGame = "IN GAME",
@@ -240,7 +254,7 @@ public static class LauncherText
         ControlsSub = "Tastiera, mouse e controller funzionano insieme; risponde quello che usi.",
         General = "GENERALE", KeyboardMouse = "Tastiera e mouse",
         InvertY = "Inverti camera Y", Vibration = "Vibrazione",
-        ControlsHint = "Il remapping completo arriverà dopo. Questi flag vanno in settings.toml.",
+        ControlsHint = "WASD muovi. Click per catturare il mouse; F1 alterna, Esc rilascia (Esc non è Indietro — usa Backspace). Spazio / Shift / E / F azioni.",
         GameTitle = "GIOCO",
         GameSub = "La tua copia del gioco, la lingua e il launcher.",
         LanguageSec = "LINGUA",
@@ -276,15 +290,22 @@ public static class LauncherText
         HintBorderless = "Borderless riempie lo schermo e cambia subito.",
         HintWindow = "Dimensione in uscita.",
         HintVSync = "Disattiva VSync per frame rate sopra il monitor.",
-        HintApi = "D3D12 nativo. Vulkan riservato.",
+        HintApi = "Solo D3D12 per ora. Vulkan disabilitato finché non è collegato.",
         HintRender = "Altezza del frame. Come la finestra = 100%.",
         HintUpscaler = "AMD FSR / DLSS / XeSS. Questo host usa FSR 1.0; gli altri tornano indietro finché non collegati.",
         HintAniso = "Il filtro anisotropico tiene nitido il terreno lontano.",
         HintFps = "Il gioco gira ogni frame in modo nativo a questo rate.",
         HintFrameGen = "Frame generati tra quelli del gioco. Non ancora in questo host.",
         HintDlss = "Quale modello DLSS viene usato.",
+        PresetSec = "PRESET GRAFICI",
+        Preset = "Preset",
+        HintPreset = "Raggruppa upscaler, filmic e filtri in base al tier GPU.",
+        BtnUseRecommended = "Usa consigliato",
+        OptCustom = "Personalizzato",
+        GpuLine = "Rilevata: {0}{1} — tier {2} — consigliato: {3}",
+        GpuLineUnknown = "GPU non rilevata — consigliato: Bilanciato.",
         AdvVulkan = "VULKAN",
-        AdvVulkanBody = "Vulkan richiede vkd3d-proton. Questo host EUR è solo D3D12 per ora; la scelta API resta salvata.",
+        AdvVulkanBody = "Vulkan è disabilitato in questa build. L’host usa solo Direct3D 12; il selettore API non può cambiare.",
         AdvFiles = "FILE", AdvOpenLogs = "Apri cartella log", AdvOpenPort = "Apri cartella port",
         AdvUpscaler = "RUNTIME UPSCALER", AdvRefreshDll = "Aggiorna stato DLL",
         AdvInGame = "IN GIOCO",
@@ -528,6 +549,13 @@ public static class LauncherText
             HintFps = Nz(partial.HintFps, e.HintFps),
             HintFrameGen = Nz(partial.HintFrameGen, e.HintFrameGen),
             HintDlss = Nz(partial.HintDlss, e.HintDlss),
+            PresetSec = Nz(partial.PresetSec, e.PresetSec),
+            Preset = Nz(partial.Preset, e.Preset),
+            HintPreset = Nz(partial.HintPreset, e.HintPreset),
+            BtnUseRecommended = Nz(partial.BtnUseRecommended, e.BtnUseRecommended),
+            OptCustom = Nz(partial.OptCustom, e.OptCustom),
+            GpuLine = Nz(partial.GpuLine, e.GpuLine),
+            GpuLineUnknown = Nz(partial.GpuLineUnknown, e.GpuLineUnknown),
             AdvVulkan = Nz(partial.AdvVulkan, e.AdvVulkan),
             AdvVulkanBody = Nz(partial.AdvVulkanBody, e.AdvVulkanBody),
             AdvFiles = Nz(partial.AdvFiles, e.AdvFiles),

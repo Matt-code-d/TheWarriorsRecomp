@@ -17,4 +17,10 @@ uint16_t HeldOnAnyController();  // face buttons as XINPUT_GAMEPAD_A/B/X/Y masks
 Pad Poll(int port);
 void Rumble(int port, uint16_t left, uint16_t right);
 
+// Mouse look (WR-style): click to capture, F1 toggles, Escape / focus-loss releases.
+// Returns true when the message was consumed (do not pass to the game / DefWindowProc).
+bool HandleWindowMessage(void* hwnd, unsigned msg, std::uintptr_t wp, std::intptr_t lp);
+
+bool MouseCaptured();
+
 }  // namespace input

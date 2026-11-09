@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _titleBgTimer = new();
     private int _titleBgIndex;
     private int _titleBgFps = 10;
+    private GpuDetectionResult _gpu = new();
 
     private sealed record ComboOpt(string Label, string Value)
     {
@@ -72,6 +73,7 @@ public partial class MainWindow : Window
                 TxtPlayMsg.Text = "Font pack failed: " + FontVault.Status;
             LoadTitleBgClip();
             ApplySetupGate();
+            RefreshGpuDetection(autoApply: true);
         };
         _uiReady = true;
         ApplySetupGate();
@@ -110,6 +112,11 @@ public partial class MainWindow : Window
 
         LblVideoTitle.Text = t.VideoTitle;
         LblVideoSub.Text = t.VideoSub;
+        LblPresetSec.Text = t.PresetSec;
+        LblVidPreset.Text = t.Preset;
+        HintVidPreset.Text = t.HintPreset;
+        BtnApplyRecommended.Content = t.BtnUseRecommended;
+        RefreshGpuLine();
         LblDisplaySec.Text = t.DisplaySec;
         LblRenderSec.Text = t.RenderingSec;
         LblVidDisplayMode.Text = t.DisplayMode;
@@ -226,10 +233,10 @@ public partial class MainWindow : Window
     private void FillCombos()
     {
         var t = LauncherText.ForLanguageId(_settings.UserLanguage);
+        // Vulkan is not wired in this host — D3D12 only.
         var apis = new[]
         {
             new ComboOpt(t.OptD3d12, "d3d12"),
-            new ComboOpt(t.OptVulkan, "vulkan"),
         };
         var modes = new[]
         {
@@ -330,12 +337,21 @@ public partial class MainWindow : Window
             new ComboOpt("Linear (baseline)", "linear"),
             new ComboOpt("HQ (Hermite)", "hq"),
         };
+        CmbGraphicsPreset.ItemsSource = new[]
+        {
+            new ComboOpt(t.OptPerformance, "performance"),
+            new ComboOpt(t.OptBalanced, "balanced"),
+            new ComboOpt(t.OptQuality, "quality"),
+            new ComboOpt(t.OptCustom, "custom"),
+        };
     }
 
     private void SyncUiFromSettings()
     {
         _mirroring = true;
-        SelectCombo(CmbApi, _settings.GraphicsApi);
+        _settings.GraphicsApi = "d3d12";
+        SelectCombo(CmbApi, "d3d12");
+        CmbApi.IsEnabled = false;
         SelectCombo(CmbDisplayMode, _settings.DisplayMode);
         SelectCombo(CmbDisplayModeVideo, _settings.DisplayMode);
         SelectCombo(CmbResolution, $"{_settings.Width}x{_settings.Height}");
@@ -364,6 +380,10 @@ public partial class MainWindow : Window
         SldSceneGlow.Value = _settings.SceneGlowStrength;
         TxtGlowVal.Text = _settings.SceneGlowStrength.ToString();
         SelectCombo(CmbAudioResampler, string.IsNullOrWhiteSpace(_settings.AudioResampler) ? "linear" : _settings.AudioResampler);
+        var presetKey = string.IsNullOrWhiteSpace(_settings.GraphicsPreset) ? "custom" : _settings.GraphicsPreset;
+        if (!GpuDetectionResult.TryParsePreset(presetKey, out _))
+            presetKey = GpuDetectionResult.PresetKey(GraphicsPresets.DetectCurrent(_settings));
+        SelectCombo(CmbGraphicsPreset, presetKey);
         ChkPipelineCache.IsChecked = _settings.PipelineCache;
         ChkGpuSkinning.IsChecked = _settings.GpuSkinning;
         ChkVSync.IsChecked = _settings.VSync;
@@ -392,7 +412,7 @@ public partial class MainWindow : Window
 
     private void ReadUiIntoSettings()
     {
-        if (CmbApi.SelectedItem is ComboOpt api) _settings.GraphicsApi = api.Value;
+        _settings.GraphicsApi = "d3d12";
         if (CmbDisplayMode.SelectedItem is ComboOpt mode) _settings.DisplayMode = mode.Value;
         if (CmbResolution.SelectedItem is ComboOpt res)
         {
@@ -425,6 +445,7 @@ public partial class MainWindow : Window
         _settings.SceneGlow = ChkSceneGlow.IsChecked == true;
         _settings.SceneGlowStrength = (uint)Math.Clamp(SldSceneGlow.Value, 0, 100);
         if (CmbAudioResampler.SelectedItem is ComboOpt ar) _settings.AudioResampler = ar.Value;
+        if (CmbGraphicsPreset.SelectedItem is ComboOpt gp) _settings.GraphicsPreset = gp.Value;
         _settings.PipelineCache = ChkPipelineCache.IsChecked == true;
         _settings.GpuSkinning = ChkGpuSkinning.IsChecked == true;
         _settings.VSync = ChkVSync.IsChecked == true;
@@ -432,6 +453,14 @@ public partial class MainWindow : Window
         _settings.KeyboardControls = ChkKeyboard.IsChecked == true;
         _settings.InvertCameraY = ChkInvertY.IsChecked == true;
         _settings.Vibration = ChkVibration.IsChecked == true;
+        // Manual tweaks leave the preset as Custom unless it still matches a bundle.
+        if (_settings.GraphicsPreset is not "custom")
+        {
+            var matched = GraphicsPresets.DetectCurrent(_settings);
+            if (matched == GraphicsPresetKind.Custom ||
+                !string.Equals(GpuDetectionResult.PresetKey(matched), _settings.GraphicsPreset, StringComparison.OrdinalIgnoreCase))
+                _settings.GraphicsPreset = "custom";
+        }
         UpdateRenderHint();
     }
 
@@ -455,7 +484,89 @@ public partial class MainWindow : Window
     {
         if (!_uiReady || _mirroring) return;
         ReadUiIntoSettings();
+        RefreshPresetComboFromSettings();
     }
+
+    private void GraphicsPreset_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_uiReady || _mirroring) return;
+        if (CmbGraphicsPreset.SelectedItem is not ComboOpt opt) return;
+        if (!GpuDetectionResult.TryParsePreset(opt.Value, out var kind) || kind == GraphicsPresetKind.Custom)
+        {
+            _settings.GraphicsPreset = "custom";
+            return;
+        }
+        GraphicsPresets.Apply(_settings, kind);
+        SyncUiFromSettings();
+    }
+
+    private void ApplyRecommended_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_uiReady) return;
+        var kind = _gpu.Found ? _gpu.Recommended : GraphicsPresetKind.Balanced;
+        GraphicsPresets.Apply(_settings, kind);
+        _settings.GpuPresetAutoApplied = true;
+        GraphicsPresets.StoreDetection(_settings, _gpu);
+        SyncUiFromSettings();
+        RefreshGpuLine();
+    }
+
+    private void RefreshGpuDetection(bool autoApply)
+    {
+        try { _gpu = GpuDetect.Detect(); }
+        catch { _gpu = new GpuDetectionResult(); }
+
+        var prevId = _settings.GpuId ?? "";
+        var prevTable = _settings.GpuTierTableVersion;
+        GraphicsPresets.StoreDetection(_settings, _gpu);
+        var newId = _settings.GpuId ?? "";
+        var changed = !string.Equals(prevId, newId, StringComparison.OrdinalIgnoreCase) ||
+                      prevTable != _gpu.TableVersion;
+
+        // First launch (or new GPU / tier table): apply the recommended bundle once.
+        if (autoApply && (_settings.GpuPresetAutoApplied == false || changed && string.IsNullOrWhiteSpace(prevId)))
+        {
+            if (!_settings.GpuPresetAutoApplied || _settings.GraphicsPreset is "custom" or "")
+            {
+                GraphicsPresets.Apply(_settings, _gpu.Recommended);
+                _settings.GpuPresetAutoApplied = true;
+                SyncUiFromSettings();
+            }
+        }
+        RefreshGpuLine();
+        try { _settings.Save(); } catch { /* ignore */ }
+    }
+
+    private void RefreshGpuLine()
+    {
+        var t = LauncherText.ForLanguageId(_settings.UserLanguage);
+        if (!_gpu.Found || string.IsNullOrWhiteSpace(_gpu.DisplayName))
+        {
+            TxtGpuDetect.Text = t.GpuLineUnknown;
+            return;
+        }
+        var vram = _gpu.VramMb > 0 ? $" ({_gpu.VramMb} MB)" : "";
+        var rec = PresetLabel(t, _gpu.Recommended);
+        TxtGpuDetect.Text = string.Format(t.GpuLine, _gpu.DisplayName, vram, _gpu.TierKey.ToUpperInvariant(), rec);
+    }
+
+    private void RefreshPresetComboFromSettings()
+    {
+        _mirroring = true;
+        var key = GpuDetectionResult.PresetKey(GraphicsPresets.DetectCurrent(_settings));
+        if (_settings.GraphicsPreset == "custom") key = "custom";
+        else _settings.GraphicsPreset = key;
+        SelectCombo(CmbGraphicsPreset, key);
+        _mirroring = false;
+    }
+
+    private static string PresetLabel(LauncherText.Bundle t, GraphicsPresetKind kind) => kind switch
+    {
+        GraphicsPresetKind.Performance => t.OptPerformance,
+        GraphicsPresetKind.Quality => t.OptQuality,
+        GraphicsPresetKind.Custom => t.OptCustom,
+        _ => t.OptBalanced,
+    };
 
     private void MirrorDisplay_Changed(object sender, SelectionChangedEventArgs e)
     {

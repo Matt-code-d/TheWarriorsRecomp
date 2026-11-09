@@ -124,6 +124,9 @@ void ApplyNow() {
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    // Mouse capture / F1 / Escape-release before ImGui so look works like the usual PC model.
+    if (input::HandleWindowMessage(hwnd, msg, wp, lp)) return 0;
+
     // Host hotkeys before ImGui / game so F9 is never swallowed (D3D flip BitBlt is black — GPU path handles it).
     if (msg == WM_KEYDOWN) {
         if (wp == VK_F3) {

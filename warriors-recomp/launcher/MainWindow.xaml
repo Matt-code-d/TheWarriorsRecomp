@@ -114,6 +114,22 @@
         </StackPanel>
         <ScrollViewer VerticalScrollBarVisibility="Auto">
           <StackPanel>
+            <TextBlock x:Name="LblPresetSec" Text="GRAPHICS PRESET" Style="{StaticResource FieldLabel}"/>
+            <TextBlock x:Name="TxtGpuDetect" Margin="0,0,0,8" Foreground="{StaticResource Mute}" FontSize="12" TextWrapping="Wrap"
+                       Text="Detecting GPU…"/>
+            <Grid Margin="0,0,0,10">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="160"/><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock x:Name="LblVidPreset" Style="{StaticResource FieldLabel}" Text="Preset" VerticalAlignment="Center"/>
+              <ComboBox x:Name="CmbGraphicsPreset" Grid.Column="1" DisplayMemberPath="Label" SelectionChanged="GraphicsPreset_Changed"/>
+              <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="16,0,0,0" VerticalAlignment="Center">
+                <Button x:Name="BtnApplyRecommended" Content="Use recommended" Padding="10,4" Click="ApplyRecommended_Click"/>
+                <TextBlock x:Name="HintVidPreset" Margin="12,0,0,0" VerticalAlignment="Center" Foreground="{StaticResource Mute}" FontSize="12" TextWrapping="Wrap"
+                           Text="Bundles upscaler, filmic and filtering for your GPU tier."/>
+              </StackPanel>
+            </Grid>
+
             <TextBlock x:Name="LblDisplaySec" Text="DISPLAY" Style="{StaticResource FieldLabel}"/>
 
             <Grid Margin="0,0,0,5">
@@ -151,7 +167,7 @@
               </Grid.ColumnDefinitions>
               <TextBlock x:Name="LblVidApi" Style="{StaticResource FieldLabel}" Text="Graphics API" VerticalAlignment="Center"/>
               <ComboBox x:Name="CmbApi" Grid.Column="1" DisplayMemberPath="Label" SelectionChanged="Settings_Changed"/>
-              <TextBlock Grid.Column="2" Margin="16,0,0,0" VerticalAlignment="Center" Foreground="{StaticResource Mute}" FontSize="12" x:Name="HintVidApi" Text="D3D12 native. Vulkan reserved."/>
+              <TextBlock Grid.Column="2" Margin="16,0,0,0" VerticalAlignment="Center" Foreground="{StaticResource Mute}" FontSize="12" x:Name="HintVidApi" Text="D3D12 only for now. Vulkan is disabled."/>
             </Grid>
             <Grid Margin="0,0,0,5">
               <Grid.ColumnDefinitions>
@@ -354,7 +370,7 @@
           <StackPanel>
             <TextBlock x:Name="LblAdvVulkan" Text="VULKAN" Style="{StaticResource FieldLabel}"/>
             <TextBlock Foreground="{StaticResource Mute}" TextWrapping="Wrap" Margin="0,0,0,18" FontSize="12"
-                       x:Name="TxtAdvVulkan" Text="Vulkan needs vkd3d-proton. This EUR host is D3D12-only for now; the Graphics API choice is saved for later."/>
+                       x:Name="TxtAdvVulkan" Text="Vulkan is disabled in this build. The host runs Direct3D 12 only."/>
 
             <TextBlock x:Name="LblAdvFiles" Text="FILES" Style="{StaticResource FieldLabel}"/>
             <StackPanel Orientation="Horizontal" Margin="0,0,0,18">

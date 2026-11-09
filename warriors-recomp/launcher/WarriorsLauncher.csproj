@@ -17,6 +17,9 @@
     <Using Include="System.Threading.Tasks" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup>
     <Resource Include="Assets\thewarriorsrecompmin.png" />
     <Resource Include="Assets\thewarriorsrecomp.png" Condition="Exists('Assets\thewarriorsrecomp.png')" />
     <!-- Obfuscated UI face (deflate+XOR). Raw TTF is never packaged. -->

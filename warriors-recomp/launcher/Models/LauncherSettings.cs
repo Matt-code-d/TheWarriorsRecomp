@@ -93,6 +93,28 @@ public sealed class LauncherSettings
 
     public bool GpuSkinning { get; set; } = true;
 
+    /// <summary>performance | balanced | quality | custom — graphics preset bundle.</summary>
+    public string GraphicsPreset { get; set; } = "custom";
+
+    /// <summary>Last detected GPU display name (informational).</summary>
+    public string GpuName { get; set; } = "";
+
+    /// <summary>vendor:device hex from WMI PNP id.</summary>
+    public string GpuId { get; set; } = "";
+
+    /// <summary>unknown | t0 | t1 | t2 | t3</summary>
+    public string GpuTier { get; set; } = "unknown";
+
+    public int GpuVramMb { get; set; }
+
+    /// <summary>Recommended preset key from the tier table.</summary>
+    public string GpuRecommendedPreset { get; set; } = "balanced";
+
+    public int GpuTierTableVersion { get; set; }
+
+    /// <summary>True after we auto-applied the recommended preset once for this GPU/table.</summary>
+    public bool GpuPresetAutoApplied { get; set; }
+
     /// <summary>Legacy FSR1 index derived from Upscaler + UpscaleQuality (also written as <c>fsr</c>).</summary>
     public uint Fsr => DeriveFsr(Upscaler, UpscaleQuality);
 

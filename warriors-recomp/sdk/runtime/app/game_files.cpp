@@ -7,6 +7,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <cwctype>
@@ -25,6 +26,21 @@ namespace app {
 namespace {
 
 namespace fs = std::filesystem;
+
+// Prefer the WPF launcher when the dump is not installed yet (FIRST SETUP).
+bool TryOpenLauncher() {
+    fs::path launcher = ExeDir() / L"WarriorsLauncher.exe";
+    std::error_code ec;
+    if (!fs::is_regular_file(launcher, ec)) return false;
+    HINSTANCE r = ShellExecuteW(nullptr, L"open", launcher.c_str(), nullptr, ExeDir().c_str(), SW_SHOWNORMAL);
+    auto code = reinterpret_cast<intptr_t>(r);
+    if (code <= 32) {
+        LOGW("game: could not open launcher (%lld): %s", static_cast<long long>(code), launcher.string().c_str());
+        return false;
+    }
+    LOGR("game: no dump yet — opened %s", launcher.string().c_str());
+    return true;
+}
 
 // assets beside the exe or in any folder above it (the build output)
 fs::path FindAssets() {
@@ -111,6 +127,8 @@ bool FindGame(GameFiles& game) {
     }
 
     if (other_name.empty()) {
+        // Before FIRST SETUP: hand off to the launcher instead of a dead-end error box.
+        if (TryOpenLauncher()) return false;
         MessageBoxW(nullptr, kGame.missing, kGame.short_title, MB_ICONERROR);
         return false;
     }

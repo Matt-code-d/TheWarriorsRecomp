@@ -40,6 +40,7 @@ If you re-extract the ISO, re-run `tools\alias_eur_movies.ps1` so NTSC-named `.b
 - [x] Cutscene audio under tutorial: SilenceAll had **paused** 65 XACT buffers; game `Pause(0)` resumed mid-cue presentation music. Now **hard stop + rewind** (inspired by stop-on-skip pattern, not pause). Drop late stream Process 2s.
 - [x] Frame pacing: waitable swap chain + max latency 2. **EUR PAL guest clock 50 Hz** (VBlank was 60 → game ~20% fast even at “60 FPS”). `Pace` clamps to ≤50; default `fps_cap=50`.
 - [x] **FSR 1.0** (AMD MIT EASU+RCAS) on present blit when `fsr=1..4` and render scale < output; launcher GRAPHICS dropdown + `settings.toml`.
+- [x] Launcher GRAPHICS tabs: GAME / DISPLAY / RENDERING / CONTROLS / LANGUAGE / ADVANCED. `settings.toml` writes `upscaler` / `upscale_quality` / `frame_generation` / `sharpness` / controls keys; host maps FSR path (DLSS/XeSS/FG not wired — fallback FSR1).
 - [x] Launcher UI follows selected game language (En/De/Fr/Es/It)
 - [x] Launcher Warriors theme (jersey yellow / vest red / asphalt)
 - [ ] Confirm in-game: logos / menu / language / audio / first mission / tutorial glow

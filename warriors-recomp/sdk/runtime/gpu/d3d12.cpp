@@ -21,10 +21,12 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <imgui.h>
 #include <backends/imgui_impl_dx12.h>
@@ -183,6 +185,107 @@ float4 vs(uint id : SV_VertexID) : SV_Position {
 float4 psmain() : SV_Target { return colour; }
 )";
 
+// Present look — same goals as a stable cinematic grade (mid-grey locked ACES, mask-gated
+// highlight headroom, mild print, optional vignette/grain). Not a line copy of any other port:
+// different cbuffer layout, tap set, and grade coefficients. p0 = exposure, white, blend, norm;
+// p1 = hdr, lut_mix, vignette, grain; p2.x = mode flags (1 grade, 2 glow).
+const char* kPresentLookHlsl = R"(
+cbuffer B : register(b1) { float4 p0; float4 p1; float4 p2; };
+Texture2D img : register(t0);
+SamplerState ls : register(s0);
+struct O { float4 p : SV_Position; float2 uv : TEXCOORD0; };
+O vs(uint id : SV_VertexID) {
+    O o;
+    o.uv = float2((id << 1) & 2, id & 2);
+    o.p = float4(o.uv * float2(2, -2) + float2(-1, 1), 0, 1);
+    return o;
+}
+float Luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
+float Hash12(float2 p) {
+    float3 q = frac(float3(p.xyx) * 0.1031);
+    q += dot(q, q.yzx + 33.33);
+    return frac((q.x + q.y) * q.z);
+}
+float3 AcesFit(float3 x) {
+    float3 n = x * (2.51 * x + 0.03);
+    float3 d = x * (2.43 * x + 0.59) + 0.14;
+    return saturate(n / d);
+}
+float3 NeighbourGlow(float2 uv, float2 px) {
+    float3 a = 0;
+    a += img.SampleLevel(ls, uv + float2(-px.x, 0), 0).rgb;
+    a += img.SampleLevel(ls, uv + float2( px.x, 0), 0).rgb;
+    a += img.SampleLevel(ls, uv + float2(0, -px.y), 0).rgb;
+    a += img.SampleLevel(ls, uv + float2(0,  px.y), 0).rgb;
+    a += 0.55 * img.SampleLevel(ls, uv + px * float2(-1, -1), 0).rgb;
+    a += 0.55 * img.SampleLevel(ls, uv + px * float2( 1, -1), 0).rgb;
+    a += 0.55 * img.SampleLevel(ls, uv + px * float2(-1,  1), 0).rgb;
+    a += 0.55 * img.SampleLevel(ls, uv + px * float2( 1,  1), 0).rgb;
+    return a / 6.2;
+}
+float3 StockGrade(float3 rgb) {
+    float y = Luma(rgb);
+    float toe = (y * y) * 1.025 / (y + 0.025);
+    rgb *= (y > 1e-5) ? (toe / y) : 1.0;
+    rgb = lerp(y.xxx, rgb, 0.90);
+    float pit = saturate(4.0 * y * (1.0 - y) * (1.0 - y));
+    rgb += float3(-0.032, 0.007, 0.028) * pit;
+    float peak = smoothstep(0.45, 1.0, y);
+    rgb *= lerp(1.0, float3(1.04, 1.01, 0.94), peak);
+    return saturate(rgb);
+}
+float4 psmain(O i) : SV_Target {
+    float3 disp = img.SampleLevel(ls, i.uv, 0).rgb;
+    float exposure = max(p0.x, 1e-3);
+    float white = max(p0.y, 1.0);
+    float blend = saturate(p0.z);
+    float norm = max(p0.w, 1e-4);
+    float hdr = max(p1.x, 0.0);
+    float grade_amt = saturate(p1.y);
+    float vignette = saturate(p1.z);
+    float grain = saturate(p1.w);
+    uint mode = (uint)p2.x;
+    float2 px = fwidth(i.uv) * 2.1;
+    float3 glow = NeighbourGlow(i.uv, px);
+    float glow_w = saturate((Luma(glow) - 0.55) * 2.8);
+
+    if (mode & 2u) {
+        float3 warm = saturate(glow_w * p2.y * float3(1.0, 0.38, 0.14));
+        disp = 1.0 - (1.0 - disp) * (1.0 - warm);
+    }
+
+    // mode 4: vivid (filmic off) — punch saturation + mild contrast, no ACES lift.
+    if (mode & 4u) {
+        float3 c = saturate(disp);
+        float y = Luma(c);
+        c = lerp(y.xxx, c, 1.38);
+        c = saturate((c - 0.5) * 1.10 + 0.5);
+        c = lerp(c, StockGrade(c), 0.35);
+        return float4(saturate(c), 1);
+    }
+    if (!(mode & 1u)) return float4(saturate(disp), 1);
+
+    // Linearise. Expand only bright neighbourhoods (stand-in for a light mask) — never the
+    // whole plate, or fog/streamer hitch reads as a full-frame flash.
+    float3 lin = pow(saturate(disp), 2.2);
+    float peak = smoothstep(0.35, 1.0, max(lin.r, max(lin.g, lin.b)));
+    lin *= 1.0 + hdr * glow_w * peak;
+    float3 clipped = min(lin, white.xxx);
+    float3 mapped = AcesFit(clipped * exposure) * norm;
+    float3 mixed = lerp(min(clipped, 1.0), mapped, blend);
+    float3 outc = pow(saturate(mixed), 1.0 / 2.2);
+    outc = lerp(outc, StockGrade(outc), grade_amt);
+    float2 q = (i.uv - 0.5) * float2(p2.z > 1e-3 ? p2.z : 1.0, 1.0);
+    float r = length(q) / max(length(float2(p2.z > 1e-3 ? p2.z : 1.0, 1.0) * 0.5), 1e-3);
+    outc *= 1.0 - 0.25 * vignette * smoothstep(0.5, 1.0, r);
+    if (grain > 1e-3) {
+        float mid = Luma(outc);
+        outc += grain * 0.12 * (Hash12(i.uv * float2(1920, 1080)) - 0.5) * (0.3 + 2.8 * mid * (1.0 - mid));
+    }
+    return float4(saturate(outc), 1);
+}
+)";
+
 float Bits(uint32_t v) {
     float f;
     std::memcpy(&f, &v, 4);
@@ -207,10 +310,12 @@ D3D12_BLEND Blend(uint32_t v, bool alpha) {
         case 0x301: return alpha ? D3D12_BLEND_INV_SRC_ALPHA : D3D12_BLEND_INV_SRC_COLOR;
         case 0x302: return D3D12_BLEND_SRC_ALPHA;
         case 0x303: return D3D12_BLEND_INV_SRC_ALPHA;
-        case 0x304: return D3D12_BLEND_DEST_ALPHA;
-        case 0x305: return D3D12_BLEND_INV_DEST_ALPHA;
-        case kBlendDestColor: return alpha ? D3D12_BLEND_DEST_ALPHA : D3D12_BLEND_DEST_COLOR;
-        case 0x307: return alpha ? D3D12_BLEND_INV_DEST_ALPHA : D3D12_BLEND_INV_DEST_COLOR;
+        // Xbox back buffer is X8R8G8B8: destination alpha reads as 1. Honouring real RT
+        // alpha (DEST_ALPHA / INV_DEST_ALPHA) hardens soft lamp / ground plates into squares.
+        case 0x304: return D3D12_BLEND_ONE;
+        case 0x305: return D3D12_BLEND_ZERO;
+        case kBlendDestColor: return alpha ? D3D12_BLEND_ONE : D3D12_BLEND_DEST_COLOR;
+        case 0x307: return alpha ? D3D12_BLEND_ZERO : D3D12_BLEND_INV_DEST_COLOR;
         case 0x308: return D3D12_BLEND_SRC_ALPHA_SAT;
         case 0x8001: case 0x8003: return D3D12_BLEND_BLEND_FACTOR;
         case 0x8002: case 0x8004: return D3D12_BLEND_INV_BLEND_FACTOR;
@@ -249,7 +354,9 @@ D3D12_STENCIL_OP StencilOp(uint32_t v) {
     }
 }
 
-// D3DTADDRESS: 1 wrap, 2 mirror, 3 clamp, 4 border, 5 clamp to edge
+// D3DTADDRESS: 1 wrap, 2 mirror, 3 clamp, 4 border, 5 clamp to edge.
+// Do NOT force WRAP for mirror/border: shadow maps that sample outside 0..1 then
+// tile and stamp ghost character shadows. soft_border still overrides to BORDER.
 D3D12_TEXTURE_ADDRESS_MODE Address(uint32_t v) {
     switch (v) {
         case 2: return D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
@@ -548,7 +655,7 @@ private:
     }
     // Pass, then its step
     void Pass(const char* hlsl, const char* entry, DXGI_FORMAT rtv, D3D12_CPU_DESCRIPTOR_HANDLE rh, uint32_t w,
-              uint32_t h, ID3D12Resource* const src[3], const DXGI_FORMAT fmt[3], const float p[8],
+              uint32_t h, ID3D12Resource* const src[3], const DXGI_FORMAT fmt[3], const float p[12],
               float blend) override;
     ID3D12PipelineState* EnsurePassPipeline(const char* hlsl, const char* entry, DXGI_FORMAT rtv, float blend);
     // Draw, in call order, each callee right after its caller
@@ -638,6 +745,8 @@ private:
     void BlitFrame(Target& t, uint32_t bi);
     void BlitFrameFsr(Target& t, uint32_t bi, float vw, float vh, float vp_x, float vp_y);
     bool EnsureFsrTarget(uint32_t w, uint32_t h);
+    bool EnsurePostTarget(uint32_t w, uint32_t h);
+    void ApplyPresentLook(uint32_t bi);
     ID3D12PipelineState* EnsureFsrPipeline(const wchar_t* file, const char* entry);
     ID3DBlob* CompileFsrFile(const wchar_t* file, const char* entry, const char* profile, uint64_t& hash);
     void RenderUi();
@@ -786,6 +895,10 @@ private:
     ComPtr<ID3D12Resource> fsr_easu_;
     D3D12_RESOURCE_STATES fsr_easu_state_ = D3D12_RESOURCE_STATE_COMMON;
     uint32_t fsr_easu_w_ = 0, fsr_easu_h_ = 0;
+    ComPtr<ID3D12Resource> post_;
+    D3D12_RESOURCE_STATES post_state_ = D3D12_RESOURCE_STATE_COMMON;
+    uint32_t post_w_ = 0, post_h_ = 0;
+    uint32_t post_rtv_slot_ = UINT_MAX;
     uint32_t fsr_rtv_slot_ = UINT32_MAX;
     ComPtr<ID3D12PipelineState> fsr_easu_pso_, fsr_rcas_pso_;
     Target* bound_rt_ = nullptr;
@@ -855,6 +968,12 @@ bool D3D12Backend::Init(uint32_t width, uint32_t height) {
     LoadSettings();
     Begin();
     LOGI("d3d12: %ux%u guest, %ux%u window, render scale %.3f", width, height, bb_w_, bb_h_, scale_);
+    // Guest Xbox vertex programs already compile to HLSL and run on the GPU (shaders.cpp).
+    // gpu_skinning keeps that path; turning it off is reserved (no CPU skinning fallback yet).
+    LOGI("d3d12: pipeline_cache=%d gpu_skinning=%d filmic=%d scene_glow=%d", app::Get().pipeline_cache ? 1 : 0,
+         app::Get().gpu_skinning ? 1 : 0, app::Get().filmic ? 1 : 0, app::Get().scene_glow ? 1 : 0);
+    if (!app::Get().gpu_skinning)
+        LOGW("d3d12: gpu_skinning=0 ignored — host has no CPU vertex-program fallback; GPU VP stays on");
     return true;
 }
 
@@ -1461,6 +1580,35 @@ ID3DBlob* D3D12Backend::Compile(const std::string& src, const char* entry, const
     hash = Hash(src.data(), src.size(), entry_seed);
     auto it = blobs_.find(hash);
     if (it != blobs_.end()) return it->second.Get();
+
+    auto cache_path = [&]() {
+        char name[32];
+        std::snprintf(name, sizeof(name), "%016llx.dxbc", (unsigned long long)hash);
+        return app::ExeDir() / "shader_cache" / name;
+    };
+
+    if (app::Get().pipeline_cache) {
+        std::filesystem::path path = cache_path();
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(path, ec)) {
+            std::ifstream in(path, std::ios::binary);
+            if (in) {
+                in.seekg(0, std::ios::end);
+                size_t n = size_t(in.tellg());
+                in.seekg(0);
+                std::vector<char> bytes(n);
+                if (n && in.read(bytes.data(), std::streamsize(n))) {
+                    ComPtr<ID3DBlob> cached;
+                    if (SUCCEEDED(D3DCreateBlob(n, &cached)) && cached) {
+                        std::memcpy(cached->GetBufferPointer(), bytes.data(), n);
+                        blobs_[hash] = cached;
+                        return cached.Get();
+                    }
+                }
+            }
+        }
+    }
+
     ComPtr<ID3DBlob> code;
     ComPtr<ID3DBlob> err;
     PerfScope perf_compile{g_perf.compile};
@@ -1474,6 +1622,14 @@ ID3DBlob* D3D12Backend::Compile(const std::string& src, const char* entry, const
         return nullptr;
     }
     blobs_[hash] = code;
+    if (app::Get().pipeline_cache && code) {
+        std::error_code ec;
+        std::filesystem::create_directories(app::ExeDir() / "shader_cache", ec);
+        std::ofstream out(cache_path(), std::ios::binary);
+        if (out)
+            out.write(static_cast<const char*>(code->GetBufferPointer()),
+                      std::streamsize(code->GetBufferSize()));
+    }
     return code.Get();
 }
 
@@ -1542,7 +1698,7 @@ ID3D12PipelineState* D3D12Backend::EnsurePassPipeline(const char* hlsl, const ch
 
 void D3D12Backend::Pass(const char* hlsl, const char* entry, DXGI_FORMAT rtv, D3D12_CPU_DESCRIPTOR_HANDLE rh,
                         uint32_t w, uint32_t h, ID3D12Resource* const src[3], const DXGI_FORMAT fmt[3],
-                        const float p[8], float blend) {
+                        const float p[12], float blend) {
     ID3D12PipelineState* pso = EnsurePassPipeline(hlsl, entry, rtv, blend);
     if (!pso) return;
     uint32_t slot = AllocSrvSlots(4);
@@ -1555,7 +1711,9 @@ void D3D12Backend::Pass(const char* hlsl, const char* entry, DXGI_FORMAT rtv, D3
         dev_->CreateShaderResourceView(i < 3 ? src[i] : nullptr, &sv, Cpu(srv_heap_.Get(), slot + i, srv_inc_));
     }
     Alloc cb = Upload(256, 256);
-    std::memcpy(cb.cpu, p, 8 * sizeof(float));
+    // Present-look uses three float4s; other callers may pass eight — rest stays zeroed.
+    std::memset(cb.cpu, 0, 256);
+    std::memcpy(cb.cpu, p, 12 * sizeof(float));
     cl_->OMSetRenderTargets(1, &rh, FALSE, nullptr);
     SetFullViewport(w, h);
     if (blend >= 0) {
@@ -2058,6 +2216,9 @@ D3D12_SAMPLER_DESC StageSampler(const State& s, int i, const DrawTextures& stage
                                          : D3D12_FILTER_COMPARISON_MIN_MAG_MIP_POINT;
         sd.ComparisonFunc = Cmp(s.rs[kRsShadowFunc]);
         sd.MaxAnisotropy = 0;
+        // Outside the character shadow map must read as lit (not tiled WRAP ghosts).
+        sd.AddressU = sd.AddressV = sd.AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+        sd.BorderColor[0] = sd.BorderColor[1] = sd.BorderColor[2] = sd.BorderColor[3] = 1.0f;
     }
     return sd;
 }
@@ -2790,7 +2951,7 @@ void D3D12Backend::SetTextureViewsAndSamplers(const State& s, const Assembled& a
     bool soft_screen = SoftLightScreen(s, a);  // diag only — no cookie/border (blur/radial both failed)
     bool soft_loose = SoftLightScreenLoose(s, a);
     // Border only when UV island overlaps 0..1 (classic wrap falloff). Tutorial 64² cookie has V entirely
-    // in [-1,-0.74] — BORDER would sample black; keep WRAP and rely on AABB soft_cookie instead.
+    // in [-1,-0.74] — BORDER would sample black; keep WRAP there.
     bool soft_border = false;
     if ((soft_vol || soft_proj) && AnyStageWraps(s) && !unit) {
         float umin = 0, umax = 0, vmin = 0, vmax = 0;
@@ -2803,101 +2964,9 @@ void D3D12Backend::SetTextureViewsAndSamplers(const State& s, const Assembled& a
         }
     }
     bool clamp = soft_border || (AnyStageWraps(s) && unit);
-    // Cap early spam; keep a rolling counter so tutorial soft draws still show up in the log.
-    // Extra fields: UV/pos span + stage0 tex — needed to narrow SoftLightVolume (Rembrandt vs tutorial).
-    static int soft_logs = 0;
-    static int soft_total = 0;
-    static int soft_miss_logs = 0;
-    static std::unordered_set<uint64_t> soft_fp;
-    static std::unordered_set<uint64_t> soft_miss_fp;
-    // Hunter: SoftLightBlend+WRAP small draws that miss Volume/Screen — A/B skips proved plate ≠ those classes.
-    if (soft_blend && AnyStageWraps(s) && a.vertex_count && a.vertex_count <= 64 && !soft_vol && !soft_screen &&
-        !soft_proj) {
-        float umin = 0, umax = 0, vmin = 0, vmax = 0;
-        bool has_uv = SoftLightUvSpan(a, umin, umax, vmin, vmax);
-        float pdx = 0, pdy = 0, pdz = 0;
-        bool has_pos = SoftLightPosSpan(a, pdx, pdy, pdz);
-        TextureDesc td{};
-        bool has_tex = s.textures[0] && Describe(s.textures[0], td);
-        uint32_t zw = SimpleState(s, kMZWriteEnable);
-        uint32_t zen = s.rs[kRsZEnable];
-        // Reject reasons vs SoftLightVolume (bitfield).
-        uint32_t why = 0;
-        if (a.pretransformed) why |= 1;
-        if (a.vertex_count > 24) why |= 2;
-        if (zw) why |= 4;
-        if (unit) why |= 8;
-        if (has_uv && (umin < -4.f || umax > 4.f || vmin < -4.f || vmax > 4.f)) why |= 16;
-        if (!has_uv && !a.vertices.empty()) why |= 32;  // converted VB — UV span unread
-        if (soft_loose) why |= 64;                     // would be ScreenLoose
-        uint64_t mfp = Hash(&a.vertex_count, sizeof(a.vertex_count));
-        mfp = Hash(&why, sizeof(why), mfp);
-        uint8_t pret = a.pretransformed ? 1 : 0;
-        mfp = Hash(&pret, sizeof(pret), mfp);
-        if (has_tex) {
-            mfp = Hash(&td.width, sizeof(td.width), mfp);
-            mfp = Hash(&td.height, sizeof(td.height), mfp);
-            mfp = Hash(&td.format, sizeof(td.format), mfp);
-        }
-        bool novel = soft_miss_fp.insert(mfp).second;
-        if (novel || soft_miss_logs < 40) {
-            LOGR("softlight MISS: verts=%u pret=%d zw=%u zen=%u unit=%d loose=%d why=%X "
-                 "src=%X dst=%X tex=%08X %ux%u fmt=%u uv=%d[%.3f..%.3f,%.3f..%.3f] pos=%d[%.1f,%.1f,%.1f] "
-                 "conv=%d fp=%016llX",
-                 a.vertex_count, pret, zw, zen, unit ? 1 : 0, soft_loose ? 1 : 0, why, SimpleState(s, kMSrcBlend),
-                 SimpleState(s, kMDestBlend), has_tex ? td.data : 0, has_tex ? td.width : 0, has_tex ? td.height : 0,
-                 has_tex ? td.format : 0, has_uv ? 1 : 0, umin, umax, vmin, vmax, has_pos ? 1 : 0, pdx, pdy, pdz,
-                 a.vertices.empty() ? 0 : 1, (unsigned long long)mfp);
-            soft_miss_logs++;
-        }
-    }
-    if (soft_vol || soft_proj || soft_screen) {
-        soft_total++;
-        float umin = 0, umax = 0, vmin = 0, vmax = 0;
-        bool has_uv = SoftLightUvSpan(a, umin, umax, vmin, vmax);
-        float pdx = 0, pdy = 0, pdz = 0;
-        bool has_pos = SoftLightPosSpan(a, pdx, pdy, pdz);
-        TextureDesc td{};
-        bool has_tex = s.textures[0] && Describe(s.textures[0], td);
-        uint32_t gen0 = (s.tss[0][kTssTexCoordIndex] >> 16) & 7;
-        uint32_t ttf0 = s.tss[0][kTssTextureTransformFlags];
-        uint32_t cop0 = s.tss[0][kTssColorOp];
-        uint32_t zen = s.rs[kRsZEnable];
-        uint32_t atest = SimpleState(s, kMAlphaTestEnable);
-        // Quantize UV/pos so camera motion does not invent a new fingerprint every frame.
-        auto q8 = [](float x) -> int32_t { return int32_t(std::lround(x * 8.0f)); };
-        int32_t qu[4] = {has_uv ? q8(umin) : 0, has_uv ? q8(umax) : 0, has_uv ? q8(vmin) : 0, has_uv ? q8(vmax) : 0};
-        int32_t qp[3] = {has_pos ? q8(pdx) : 0, has_pos ? q8(pdy) : 0, has_pos ? q8(pdz) : 0};
-        uint64_t fp = Hash(&a.vertex_count, sizeof(a.vertex_count));
-        fp = Hash(&soft_vol, sizeof(soft_vol), fp);
-        fp = Hash(&soft_proj, sizeof(soft_proj), fp);
-        fp = Hash(&soft_screen, sizeof(soft_screen), fp);
-        if (has_tex) {
-            fp = Hash(&td.data, sizeof(td.data), fp);
-            fp = Hash(&td.width, sizeof(td.width), fp);
-            fp = Hash(&td.height, sizeof(td.height), fp);
-            fp = Hash(&td.format, sizeof(td.format), fp);
-        }
-        fp = Hash(qu, sizeof(qu), fp);
-        fp = Hash(qp, sizeof(qp), fp);
-        fp = Hash(&gen0, sizeof(gen0), fp);
-        fp = Hash(&ttf0, sizeof(ttf0), fp);
-        fp = Hash(&cop0, sizeof(cop0), fp);
-        uint8_t pret = a.pretransformed ? 1 : 0;
-        fp = Hash(&pret, sizeof(pret), fp);
-        bool novel = soft_fp.insert(fp).second;
-        if (novel || soft_logs < 32 || (soft_total % 120) == 0) {
-            LOGR("softlight hit: vol=%d proj=%d scr=%d verts=%u wrap=%d unit=%d border=%d pret=%d zen=%u atest=%u "
-                 "src=%X dst=%X gen0=%u ttf0=%X cop0=%u tex=%08X %ux%u fmt=%u "
-                 "uv=%d[%.3f..%.3f,%.3f..%.3f] pos=%d[%.1f,%.1f,%.1f] fp=%016llX novel=%d total=%d",
-                 soft_vol ? 1 : 0, soft_proj ? 1 : 0, soft_screen ? 1 : 0, a.vertex_count, AnyStageWraps(s) ? 1 : 0,
-                 unit ? 1 : 0, soft_border ? 1 : 0, a.pretransformed ? 1 : 0, zen, atest, SimpleState(s, kMSrcBlend),
-                 SimpleState(s, kMDestBlend), gen0, ttf0, cop0, has_tex ? td.data : 0,
-                 has_tex ? td.width : 0, has_tex ? td.height : 0, has_tex ? td.format : 0, has_uv ? 1 : 0, umin, umax,
-                 vmin, vmax, has_pos ? 1 : 0, pdx, pdy, pdz, (unsigned long long)fp, novel ? 1 : 0, soft_total);
-            soft_logs++;
-        }
-    }
+    (void)soft_blend;
+    (void)soft_screen;
+    (void)soft_loose;
     uint32_t samplers = EnsureStageSamplers(s, stages, clamp, soft_border, soft_vol || soft_proj);
     if (samplers != binds_.samplers) cl_->SetGraphicsRootDescriptorTable(3, Gpu(smp_heap_.Get(), samplers, smp_inc_));
     binds_.samplers = samplers;
@@ -3117,14 +3186,9 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     if (!BindStageTexturesAndTargets(s, stages)) return;
     PixelKey pk = MakePixelKey(s, stages.info);
     pk.quad = sh.quad;
-    // Volume=2 (RGB+a, softcen=UV AABB). Projected=1 RGB-only.
-    // DO NOT soft_cookie on SoftLightScreen — =3 radial useless; blur ghosted whole frame (2026-10-30).
+    // No soft_cookie. Cookie paths (volume=2 / projected=1 / screen=3) caused view-dependent
+    // brightness flicker; DEST_ALPHA remap + honouring Address modes is enough for the plate.
     // DO NOT force pk.quad=0.
-    bool soft_vol = SoftLightVolume(s, a);
-    if (soft_vol)
-        pk.soft_cookie = 2;
-    else if (SoftLightProjected(s))
-        pk.soft_cookie = 1;
     sh.pkey = Hash(&pk, sizeof(pk));
     EnsurePixelShader(pk, sh);
     if (!sh.vs_code || !sh.ps_code) return;
@@ -3143,21 +3207,11 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t 
     GuestExtent size;
     SurfaceSize(bound_rt_ ? s.rt : s.zs, size.w, size.h);
     DrawConstants c{};
-    // Default: unit-square cookie (centre 0.5, half-extent 0.5 → sf=0 at mid-edges).
+    // softcen unused without soft_cookie; keep unit defaults for CB layout stability.
     c.softcen[0] = 0.5f;
     c.softcen[1] = 0.5f;
     c.softcen[2] = 0.5f;
     c.softcen[3] = 0.5f;
-    if (soft_vol) {
-        float umin, umax, vmin, vmax;
-        if (SoftLightUvSpan(a, umin, umax, vmin, vmax)) {
-            c.softcen[0] = 0.5f * (umin + umax);
-            c.softcen[1] = 0.5f * (vmin + vmax);
-            // Half-extent so AABB corners hit sf≈0 (inscribed ellipse).
-            c.softcen[2] = std::max(0.5f * (umax - umin), 1e-3f);
-            c.softcen[3] = std::max(0.5f * (vmax - vmin), 1e-3f);
-        }
-    }
     UploadConstants(s, sh, k, stages, size, c);
     if (ext_) binds_ = {};
 
@@ -3614,6 +3668,89 @@ bool D3D12Backend::EnsureFsrTarget(uint32_t w, uint32_t h) {
     return true;
 }
 
+bool D3D12Backend::EnsurePostTarget(uint32_t w, uint32_t h) {
+    if (post_ && post_w_ == w && post_h_ == h) return true;
+    if (post_rtv_slot_ != UINT_MAX) {
+        free_rtv_.push_back(post_rtv_slot_);
+        post_rtv_slot_ = UINT_MAX;
+    }
+    post_.Reset();
+    post_w_ = post_h_ = 0;
+    if (free_rtv_.empty()) {
+        LOGE("d3d12: present look — no free RTV slot");
+        return false;
+    }
+    D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+    D3D12_RESOURCE_DESC rd = {};
+    rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    rd.Width = w;
+    rd.Height = h;
+    rd.DepthOrArraySize = 1;
+    rd.MipLevels = 1;
+    rd.Format = kBgra;
+    rd.SampleDesc.Count = 1;
+    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    D3D12_CLEAR_VALUE clear{kBgra, {0, 0, 0, 1}};
+    if (FAILED(dev_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                              &clear, IID_PPV_ARGS(&post_)))) {
+        LOGE("d3d12: present look target create failed");
+        return false;
+    }
+    post_state_ = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    post_rtv_slot_ = free_rtv_.back();
+    free_rtv_.pop_back();
+    dev_->CreateRenderTargetView(post_.Get(), nullptr, Cpu(rtv_heap_.Get(), post_rtv_slot_, rtv_inc_));
+    post_w_ = w;
+    post_h_ = h;
+    return true;
+}
+
+void D3D12Backend::ApplyPresentLook(uint32_t bi) {
+    const app::Settings& s = app::Get();
+    if (!post_) return;
+    Transition(post_.Get(), post_state_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    D3D12_CPU_DESCRIPTOR_HANDLE bb = Cpu(rtv_heap_.Get(), kRtvCount + bi, rtv_inc_);
+
+    // Strength 0..100 → 0..2. Mid-grey 0.18 locked under ACES so fog hitch ≠ whole-frame flash.
+    const float strength = (float(std::min(s.filmic_strength, 100u)) / 100.f) * 2.f;
+    const float hdr = strength;
+    const float white = 1.f + hdr;
+    const float blend = std::min(1.f, 0.5f * strength);
+    const float grade_amt = std::min(1.f, strength);
+    float exposure = 1.f;
+    float norm = 1.f;
+    auto aces1 = [](float x) {
+        return x * (2.51f * x + 0.03f) / (x * (2.43f * x + 0.59f) + 0.14f);
+    };
+    if (white > 1.0001f) {
+        float lo = 1e-3f, hi = 32.f;
+        for (int i = 0; i < 48; ++i) {
+            exposure = 0.5f * (lo + hi);
+            if (aces1(0.18f * exposure) / aces1(white * exposure) < 0.18f) lo = exposure;
+            else hi = exposure;
+        }
+        norm = 1.f / aces1(white * exposure);
+    }
+
+    float p[12] = {};
+    p[0] = exposure;
+    p[1] = white;
+    p[2] = s.filmic ? blend : 0.f;
+    p[3] = norm;
+    p[4] = s.filmic ? hdr : 0.f;
+    p[5] = s.filmic ? grade_amt : 0.f;
+    p[6] = s.filmic ? float(std::min(s.filmic_vignette, 100u)) / 100.f : 0.f;
+    p[7] = s.filmic ? float(std::min(s.filmic_grain, 100u)) / 100.f : 0.f;
+    // 1 = filmic grade, 2 = glow, 4 = vivid (filmic off — more saturated, no ACES).
+    uint32_t flags = (s.filmic ? 1u : 4u) | (s.scene_glow ? 2u : 0u);
+    p[8] = float(flags);
+    p[9] = float(std::min(s.scene_glow_strength, 100u)) / 100.f * 0.30f;
+    p[10] = bb_h_ > 0 ? float(bb_w_) / float(bb_h_) : 1.f;
+    ID3D12Resource* src[3] = {post_.Get(), nullptr, nullptr};
+    DXGI_FORMAT fmt[3] = {kBgra, kBgra, kBgra};
+    Pass(kPresentLookHlsl, "psmain", kBgra, bb, bb_w_, bb_h_, src, fmt, p, -1.f);
+}
+
 void D3D12Backend::BlitFrameFsr(Target& t, uint32_t bi, float vw, float vh, float vp_x, float vp_y) {
     uint32_t ow = std::max(1u, uint32_t(vw + 0.5f));
     uint32_t oh = std::max(1u, uint32_t(vh + 0.5f));
@@ -3695,7 +3832,9 @@ void D3D12Backend::BlitFrame(Target& t, uint32_t bi) {
     Transition(t.res.Get(), t.state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     uint32_t fsr = app::Get().fsr;
     bool upscale = float(t.w) + 0.5f < vw || float(t.h) + 0.5f < vh;
-    if (fsr && upscale) {
+    // Present-look always runs (filmic or vivid); FSR's final bind targets the swapchain — skip when look is on.
+    bool look = true;
+    if (fsr && upscale && !look) {
         BlitFrameFsr(t, bi, vw, vh, vp_x, vp_y);
         return;
     }
@@ -3720,9 +3859,24 @@ void D3D12Backend::DrawFrame(Target* t, uint32_t bi) {
     D3D12_CPU_DESCRIPTOR_HANDLE rh = Cpu(rtv_heap_.Get(), kRtvCount + bi, rtv_inc_);
     float black[4] = {0, 0, 0, 1};
     cl_->ClearRenderTargetView(rh, black, 0, nullptr);
-    cl_->OMSetRenderTargets(1, &rh, FALSE, nullptr);
-    bound_rt_ = bound_ds_ = nullptr;
-    if (t) BlitFrame(*t, bi);
+    const app::Settings& st = app::Get();
+    (void)st;
+    // Always grade: filmic path or vivid (higher sat) when filmic is off.
+    bool look = true;
+    if (look && t && EnsurePostTarget(bb_w_, bb_h_)) {
+        Transition(post_.Get(), post_state_, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        D3D12_CPU_DESCRIPTOR_HANDLE ph = Cpu(rtv_heap_.Get(), post_rtv_slot_, rtv_inc_);
+        cl_->ClearRenderTargetView(ph, black, 0, nullptr);
+        cl_->OMSetRenderTargets(1, &ph, FALSE, nullptr);
+        bound_rt_ = bound_ds_ = nullptr;
+        BlitFrame(*t, bi);
+        cl_->OMSetRenderTargets(1, &rh, FALSE, nullptr);
+        ApplyPresentLook(bi);
+    } else {
+        cl_->OMSetRenderTargets(1, &rh, FALSE, nullptr);
+        bound_rt_ = bound_ds_ = nullptr;
+        if (t) BlitFrame(*t, bi);
+    }
     RenderUi();
     Transition(bb_[bi].Get(), bs, D3D12_RESOURCE_STATE_PRESENT);
 }
@@ -3830,8 +3984,9 @@ void D3D12Backend::Present(const Surface& front) {
     Target* t = EnsureTarget(front, false);
     if (t && LatchCpuWrite(*t)) UploadTarget(*t, front);
     if (t) Resolve(*t);
-    if (ramp_dirty_) UploadGammaRamp();
-    Transition(lut_.Get(), lut_state_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    // Store guest gamma for GetGammaRamp only — never apply on present (hitchy ramp = flash).
+    ramp_dirty_ = false;
+    gamma_ = false;
 
     uint32_t bi = swap_->GetCurrentBackBufferIndex();
     DrawFrame(t, bi);

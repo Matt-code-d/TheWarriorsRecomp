@@ -66,6 +66,16 @@ void Load() {
     s.keyboard_controls = t["keyboard_controls"].value_or(s.keyboard_controls);
     s.invert_camera_y = t["invert_camera_y"].value_or(s.invert_camera_y);
     s.vibration = t["vibration"].value_or(s.vibration);
+    s.filmic = t["filmic"].value_or(s.filmic);
+    s.filmic_strength = std::min(t["filmic_strength"].value_or(s.filmic_strength), 100u);
+    s.filmic_grain = std::min(t["filmic_grain"].value_or(s.filmic_grain), 100u);
+    s.filmic_vignette = std::min(t["filmic_vignette"].value_or(s.filmic_vignette), 100u);
+    s.filmic_lut = t["filmic_lut"].value_or(s.filmic_lut);
+    s.scene_glow = t["scene_glow"].value_or(s.scene_glow);
+    s.scene_glow_strength = std::min(t["scene_glow_strength"].value_or(s.scene_glow_strength), 100u);
+    s.audio_resampler = t["audio_resampler"].value_or(s.audio_resampler);
+    s.pipeline_cache = t["pipeline_cache"].value_or(s.pipeline_cache);
+    s.gpu_skinning = t["gpu_skinning"].value_or(s.gpu_skinning);
 
     // Map reference-style upscaler/quality → FSR1 quality index. DLSS/XeSS need Streamline/XeSS
     // runtime (not in this host yet) — fall back to FSR1 so render scale still helps.
@@ -145,7 +155,17 @@ toml::table Table() {
                   {"custom_textures", s.custom_textures},
                   {"dump_textures", s.dump_textures},
                   {"texture_dump_format", int64_t(s.texture_dump_format)},
-                  {"join_ip", s.join_ip}};
+                  {"join_ip", s.join_ip},
+                  {"filmic", s.filmic},
+                  {"filmic_strength", int64_t(s.filmic_strength)},
+                  {"filmic_grain", int64_t(s.filmic_grain)},
+                  {"filmic_vignette", int64_t(s.filmic_vignette)},
+                  {"filmic_lut", s.filmic_lut},
+                  {"scene_glow", s.scene_glow},
+                  {"scene_glow_strength", int64_t(s.scene_glow_strength)},
+                  {"audio_resampler", s.audio_resampler},
+                  {"pipeline_cache", s.pipeline_cache},
+                  {"gpu_skinning", s.gpu_skinning}};
     for (const Option& o : kGame.options) {
         if (o.flag) t.insert(o.key, *o.flag);
         else t.insert(o.key, int64_t(*o.value));

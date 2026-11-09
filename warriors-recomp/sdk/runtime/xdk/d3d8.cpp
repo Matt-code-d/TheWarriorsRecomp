@@ -537,14 +537,17 @@ HLE_STDCALL(D3DDevice_PersistDisplay, 0) {
 }
 HLE_STDCALL(D3DDevice_FlushVertexCache, 0) { return 0; }
 
-// The library keeps the ramp in one of two device slots for GetGammaRamp: both get it, whichever one its index names
+// The library keeps the ramp in one of two device slots for GetGammaRamp: both get it, whichever one its index names.
+// Do not push the ramp to the host present path: the title rewrites it often (and on hitch), which
+// reads as a full-frame brightness flicker. Store for GetGammaRamp only — same idea as ignoring
+// the ramp on present, without dropping the guest-visible copy.
 HLE_STDCALL(D3DDevice_SetGammaRamp, 2) {
     uint8_t ramp[768];
     std::memcpy(ramp, HostPtr(a[1]), 768);
     if (XDK_CDevice_GammaRamps != xdk::kUnknown)
         for (uint32_t slot = 0; slot < 2; slot++)
             std::memcpy(HostPtr(kDevice + XDK_CDevice_GammaRamps + slot * sizeof(ramp)), ramp, sizeof(ramp));
-    if (g_backend) g_backend->SetGamma(ramp);
+    (void)g_backend;
     return 0;
 }
 
@@ -623,13 +626,10 @@ HLE_STDCALL(D3DDevice_Swap, 1) {
     g_presents++;
     // the kept display is shown until the title presents its own
     kernel::SetSavedDataAddress(0);
-    // the ramp an inlined SetGammaRamp left for the vertical blank that shows this swap
-    if (g_backend && XDK_CDevice_GammaPending != xdk::kUnknown && XDK_CDevice_GammaRamps != xdk::kUnknown) {
+    // Acknowledge pending gamma without applying it to the host (avoids brightness flicker).
+    if (XDK_CDevice_GammaPending != xdk::kUnknown) {
         uint32_t i = Dev(kDevSwapCount) & 1;
-        if (Dev(XDK_CDevice_GammaPending + i * 4) == 1) {
-            SetDev(XDK_CDevice_GammaPending + i * 4, 0);
-            g_backend->SetGamma(static_cast<const uint8_t*>(HostPtr(kDevice + XDK_CDevice_GammaRamps + i * 0x300)));
-        }
+        if (Dev(XDK_CDevice_GammaPending + i * 4) == 1) SetDev(XDK_CDevice_GammaPending + i * 4, 0);
     }
     Walk(Dev(kDevPush));  // reports asked for at the end of the frame
     if (g_backend) g_backend->Present(SurfaceOf(g_buffers[1]));

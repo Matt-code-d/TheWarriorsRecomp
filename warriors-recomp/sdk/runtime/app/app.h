@@ -27,9 +27,9 @@ struct Settings {
     bool vsync = true;
     // FSR 1.0 present upscale: 0 off, 1 ultra quality, 2 quality, 3 balanced, 4 performance.
     // When on, BlitFrame uses EASU+RCAS instead of bilinear (pair with render_percent < 100).
-    // Derived from upscaler + upscale_quality (reference schema) or legacy `fsr` key.
+    // Derived from upscaler + upscale_quality, or legacy `fsr` key.
     uint32_t fsr = 0;
-    // Compatible with the public Warriors Xbox Recomp settings.toml schema.
+    // Optional present / upscaler keys written by the launcher.
     std::string upscaler = "off";          // off | fsr | dlss | xess
     std::string upscale_quality = "quality";  // native | quality | balanced | performance | ultra_performance | …
     std::string frame_generation = "off";  // off | fsr | dlss — host support TBD
@@ -45,6 +45,21 @@ struct Settings {
     bool dump_textures = false;      // each texture once into textures\dumps\ beside the exe
     uint32_t texture_dump_format = 0;  // 0 PNG, 1 DDS
     std::string join_ip;                   // co-op: a host past the LAN the system link search also asks
+    // Present look (opt-in; OFF = identical blit path). Strength/grain/vignette 0–100.
+    bool filmic = false;
+    uint32_t filmic_strength = 50;
+    uint32_t filmic_grain = 0;
+    uint32_t filmic_vignette = 35;
+    std::string filmic_lut;  // optional user .cube beside exe; empty = built-in grade only
+    // Soft bloom from bright pixels only (not SoftLight). Opt-in.
+    bool scene_glow = false;
+    uint32_t scene_glow_strength = 40;
+    // Mixer rate conversion: linear (baseline) | hq (Hermite).
+    std::string audio_resampler = "linear";
+    // Persist D3DCompile blobs under shader_cache\ (visuals unchanged).
+    bool pipeline_cache = true;
+    // Guest Xbox VP already compile to HLSL on GPU; flag reserved / logged.
+    bool gpu_skinning = true;
 };
 
 Settings& Get();

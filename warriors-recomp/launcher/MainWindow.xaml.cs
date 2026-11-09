@@ -325,6 +325,11 @@ public partial class MainWindow : Window
             new ComboOpt("8×", "8"),
             new ComboOpt("16×", "16"),
         };
+        CmbAudioResampler.ItemsSource = new[]
+        {
+            new ComboOpt("Linear (baseline)", "linear"),
+            new ComboOpt("HQ (Hermite)", "hq"),
+        };
     }
 
     private void SyncUiFromSettings()
@@ -348,6 +353,19 @@ public partial class MainWindow : Window
         SelectCombo(CmbAniso, _settings.Anisotropic.ToString());
         SldSharpness.Value = _settings.Sharpness;
         TxtSharpnessVal.Text = _settings.Sharpness.ToString();
+        ChkFilmic.IsChecked = _settings.Filmic;
+        SldFilmicStrength.Value = _settings.FilmicStrength;
+        TxtFilmicStrVal.Text = _settings.FilmicStrength.ToString();
+        SldFilmicVignette.Value = _settings.FilmicVignette;
+        TxtFilmicVigVal.Text = _settings.FilmicVignette.ToString();
+        SldFilmicGrain.Value = _settings.FilmicGrain;
+        TxtFilmicGrainVal.Text = _settings.FilmicGrain.ToString();
+        ChkSceneGlow.IsChecked = _settings.SceneGlow;
+        SldSceneGlow.Value = _settings.SceneGlowStrength;
+        TxtGlowVal.Text = _settings.SceneGlowStrength.ToString();
+        SelectCombo(CmbAudioResampler, string.IsNullOrWhiteSpace(_settings.AudioResampler) ? "linear" : _settings.AudioResampler);
+        ChkPipelineCache.IsChecked = _settings.PipelineCache;
+        ChkGpuSkinning.IsChecked = _settings.GpuSkinning;
         ChkVSync.IsChecked = _settings.VSync;
         ChkVSyncVideo.IsChecked = _settings.VSync;
         ChkCustomTex.IsChecked = _settings.CustomTextures;
@@ -400,6 +418,15 @@ public partial class MainWindow : Window
         if (CmbAniso.SelectedItem is ComboOpt an && uint.TryParse(an.Value, out var aniso))
             _settings.Anisotropic = aniso;
         _settings.Sharpness = (uint)Math.Clamp(SldSharpness.Value, 0, 100);
+        _settings.Filmic = ChkFilmic.IsChecked == true;
+        _settings.FilmicStrength = (uint)Math.Clamp(SldFilmicStrength.Value, 0, 100);
+        _settings.FilmicVignette = (uint)Math.Clamp(SldFilmicVignette.Value, 0, 100);
+        _settings.FilmicGrain = (uint)Math.Clamp(SldFilmicGrain.Value, 0, 100);
+        _settings.SceneGlow = ChkSceneGlow.IsChecked == true;
+        _settings.SceneGlowStrength = (uint)Math.Clamp(SldSceneGlow.Value, 0, 100);
+        if (CmbAudioResampler.SelectedItem is ComboOpt ar) _settings.AudioResampler = ar.Value;
+        _settings.PipelineCache = ChkPipelineCache.IsChecked == true;
+        _settings.GpuSkinning = ChkGpuSkinning.IsChecked == true;
         _settings.VSync = ChkVSync.IsChecked == true;
         _settings.CustomTextures = ChkCustomTex.IsChecked == true;
         _settings.KeyboardControls = ChkKeyboard.IsChecked == true;
@@ -524,6 +551,20 @@ public partial class MainWindow : Window
         if (!_uiReady) return;
         _settings.Sharpness = (uint)Math.Clamp(e.NewValue, 0, 100);
         UpdateRenderHint();
+    }
+
+    private void FilmicSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (sender == SldFilmicStrength && TxtFilmicStrVal != null)
+            TxtFilmicStrVal.Text = ((int)e.NewValue).ToString();
+        else if (sender == SldFilmicVignette && TxtFilmicVigVal != null)
+            TxtFilmicVigVal.Text = ((int)e.NewValue).ToString();
+        else if (sender == SldFilmicGrain && TxtFilmicGrainVal != null)
+            TxtFilmicGrainVal.Text = ((int)e.NewValue).ToString();
+        else if (sender == SldSceneGlow && TxtGlowVal != null)
+            TxtGlowVal.Text = ((int)e.NewValue).ToString();
+        if (!_uiReady || _mirroring) return;
+        ReadUiIntoSettings();
     }
 
     private void ShowPanel(string name)

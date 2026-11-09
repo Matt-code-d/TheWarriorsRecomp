@@ -546,10 +546,23 @@ std::string ShaderHooks::Constants() const { return "    float4 ext;\n"; }
 
 std::string ShaderHooks::Shadow() const {
     std::string r = g_reversed_depth ? "1 - clamp(z, 0, mx) / mx" : "clamp(z, 0, mx) / mx";
-    return R"(// the sampler compares, a linear filter blends the four results like the console does
-float4 shadow(Texture2D<float> t, SamplerComparisonState s, float2 uv, float z, int fmt, float2 px, float2 size) {
+    // Outside atlas → lit (no wrap ghosts). Soft 3x3 PCF only — no Load()/depth-gap fade
+    // (that washed every shadow to lit because compare-ref and Load spaces differ).
+    return R"(float4 shadow(Texture2D<float> t, SamplerComparisonState s, float2 uv, float z, int fmt, float2 px, float2 size) {
     float mx = fmt == 2 ? 65535.0 : 16777215.0;
-    return t.SampleCmpLevelZero(s, uv, )" + r + R"().xxxx;
+    float ref = )" + r + R"(;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return float4(1, 1, 1, 1);
+    float2 dim = (size.x > 1.0 && size.y > 1.0) ? size : float2(1024.0, 512.0);
+    float2 texel = 1.0 / dim;
+    float acc = 0.0;
+    [unroll] for (int oy = -1; oy <= 1; ++oy) {
+        [unroll] for (int ox = -1; ox <= 1; ++ox) {
+            float2 o = float2((float)ox, (float)oy) * texel;
+            acc += t.SampleCmpLevelZero(s, uv + o, ref);
+        }
+    }
+    float lit = acc * (1.0 / 9.0);
+    return float4(lit, lit, lit, lit);
 }
 )";
 }

@@ -1,6 +1,7 @@
 // Decouple sim from display FPS: scale PAL fixed-step floats (~0.02 = 1/50) when presenting faster.
 // Getters/setters live next to the Swap wrapper @ 0xB7AC0 (object fields +0xDC..+0xE8).
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -21,10 +22,10 @@ bool LooksLikeFrameDt(float v) {
 float ScaleDt(float v) {
     float s = app::FrameTimeScale();
     if (s >= 0.999f || !LooksLikeFrameDt(v)) return v;
-    // Prefer measured frame dt when available; else scale the stored PAL step.
-    float measured = app::MeasuredFrameDt();
-    if (measured > 0.f && measured <= kDtHi * 1.5f) return measured;
-    return v * s;
+    // Always scale the title's authored step. Using measured present-dt here made fog/brightness
+    // hitch every time Pace skipped a period (especially with fps_cap >> guest Hz).
+    float guest = 1.f / float(app::kGuestRefreshHz);
+    return std::min(v * s, guest * 1.25f);
 }
 
 void ScaleStackFloat(X86Context& ctx, uint8_t* base, uint32_t stack_off) {

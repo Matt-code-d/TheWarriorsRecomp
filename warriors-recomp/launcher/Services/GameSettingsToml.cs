@@ -36,6 +36,16 @@ public static class GameSettingsToml
         map["vibration"] = settings.Vibration ? "true" : "false";
         map["custom_textures"] = settings.CustomTextures ? "true" : "false";
         map["dump_textures"] = settings.DumpTextures ? "true" : "false";
+        map["filmic"] = settings.Filmic ? "true" : "false";
+        map["filmic_strength"] = settings.FilmicStrength.ToString(CultureInfo.InvariantCulture);
+        map["filmic_grain"] = settings.FilmicGrain.ToString(CultureInfo.InvariantCulture);
+        map["filmic_vignette"] = settings.FilmicVignette.ToString(CultureInfo.InvariantCulture);
+        map["filmic_lut"] = Quote(settings.FilmicLut ?? "");
+        map["scene_glow"] = settings.SceneGlow ? "true" : "false";
+        map["scene_glow_strength"] = settings.SceneGlowStrength.ToString(CultureInfo.InvariantCulture);
+        map["audio_resampler"] = Quote(string.IsNullOrWhiteSpace(settings.AudioResampler) ? "linear" : settings.AudioResampler);
+        map["pipeline_cache"] = settings.PipelineCache ? "true" : "false";
+        map["gpu_skinning"] = settings.GpuSkinning ? "true" : "false";
         if (!map.ContainsKey("texture_dump_format"))
             map["texture_dump_format"] = "0";
         if (!map.ContainsKey("join_ip"))
@@ -95,6 +105,26 @@ public static class GameSettingsToml
             settings.CustomTextures = ct is "true" or "1";
         if (map.TryGetValue("dump_textures", out var dt))
             settings.DumpTextures = dt is "true" or "1";
+        if (map.TryGetValue("filmic", out var fl))
+            settings.Filmic = fl is "true" or "1";
+        if (map.TryGetValue("filmic_strength", out var fs) && uint.TryParse(fs, out var fstr))
+            settings.FilmicStrength = Math.Clamp(fstr, 0u, 100u);
+        if (map.TryGetValue("filmic_grain", out var fg2) && uint.TryParse(fg2, out var fgr))
+            settings.FilmicGrain = Math.Clamp(fgr, 0u, 100u);
+        if (map.TryGetValue("filmic_vignette", out var fv) && uint.TryParse(fv, out var fvi))
+            settings.FilmicVignette = Math.Clamp(fvi, 0u, 100u);
+        if (map.TryGetValue("filmic_lut", out var flut))
+            settings.FilmicLut = Unquote(flut);
+        if (map.TryGetValue("scene_glow", out var sg))
+            settings.SceneGlow = sg is "true" or "1";
+        if (map.TryGetValue("scene_glow_strength", out var sgs) && uint.TryParse(sgs, out var sgstr))
+            settings.SceneGlowStrength = Math.Clamp(sgstr, 0u, 100u);
+        if (map.TryGetValue("audio_resampler", out var ar))
+            settings.AudioResampler = Unquote(ar);
+        if (map.TryGetValue("pipeline_cache", out var pc))
+            settings.PipelineCache = pc is not ("false" or "0");
+        if (map.TryGetValue("gpu_skinning", out var gs))
+            settings.GpuSkinning = gs is not ("false" or "0");
 
         // Legacy: only `fsr` without upscaler → synthesize
         if (!map.ContainsKey("upscaler") && map.TryGetValue("fsr", out var fsrRaw) &&
@@ -136,13 +166,15 @@ public static class GameSettingsToml
     static string FormatToml(Dictionary<string, string> root, Dictionary<string, string> launcher)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("# Written by WarriorsLauncher — compatible with Warriors Xbox Recomp keys");
+        sb.AppendLine("# Written by WarriorsLauncher");
         foreach (var key in new[]
                  {
                      "display_mode", "width", "height", "render_percent", "fps_cap", "vsync",
                      "upscaler", "upscale_quality", "frame_generation", "dlss_preset", "sharpness", "fsr",
                      "anisotropic_filtering", "perf_overlay", "keyboard_controls", "invert_camera_y", "vibration",
                      "custom_textures", "dump_textures", "texture_dump_format", "graphics_api", "join_ip",
+                     "filmic", "filmic_strength", "filmic_grain", "filmic_vignette", "filmic_lut",
+                     "scene_glow", "scene_glow_strength", "audio_resampler", "pipeline_cache", "gpu_skinning",
                  })
         {
             if (root.TryGetValue(key, out var v))
@@ -154,6 +186,8 @@ public static class GameSettingsToml
                 or "upscaler" or "upscale_quality" or "frame_generation" or "dlss_preset" or "sharpness" or "fsr"
                 or "anisotropic_filtering" or "perf_overlay" or "keyboard_controls" or "invert_camera_y" or "vibration"
                 or "custom_textures" or "dump_textures" or "texture_dump_format" or "graphics_api" or "join_ip"
+                or "filmic" or "filmic_strength" or "filmic_grain" or "filmic_vignette" or "filmic_lut"
+                or "scene_glow" or "scene_glow_strength" or "audio_resampler" or "pipeline_cache" or "gpu_skinning"
                 or "language")
                 continue;
             sb.AppendLine($"{kv.Key} = {kv.Value}");

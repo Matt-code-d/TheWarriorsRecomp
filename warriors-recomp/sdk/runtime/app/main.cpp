@@ -27,6 +27,7 @@
 #include "gpu/backend.h"
 #include "image_symbols.h"
 #include "kernel/kernel.h"
+#include "xdk/dsound_host.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -127,6 +128,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_KEYDOWN) {
         if (wp == VK_F3) {
             DumpThreads();
+            return 0;
+        }
+        if (wp == VK_F8) {
+            // Train / ambient loop diag: 90s of Play/Stop/Vol/EG/Pos/3D + mix-loop → logs\warriors.log
+            xdk::DirectSoundArmAudioWatch(90000);
+            LOGI("F8: audio watch armed 90s (Vol/EG/Pos/3D) — reproduce looping SFX, then check logs\\warriors.log");
             return 0;
         }
         if (wp == VK_F9) {
@@ -291,6 +298,19 @@ uint32_t TargetDisplayHz() {
         return ref > 1 ? ref : kGuestRefreshHz;
     }
     if (cap > 240) cap = 240;
+    // PAL guest is 50 Hz. Presenting at 120+ (scale≈0.42) makes fog/XACT frame-count logic
+    // wobble — brightness flash + sticky cues. Cap paced presents at 60 until sim is
+    // decoupled from present (frame_generation is not wired yet).
+    constexpr uint32_t kMaxStableHz = 60;
+    if (cap > kMaxStableHz) {
+        static bool once = false;
+        if (!once) {
+            once = true;
+            LOGR("timing: fps_cap=%u clamped to %u for EUR stability (fog/audio); set 50 or 60", cap,
+                 kMaxStableHz);
+        }
+        cap = kMaxStableHz;
+    }
     return cap;
 }
 
@@ -340,17 +360,18 @@ bool PresentUseVsync() {
 
 void Pace() {
     uint32_t hz = TargetDisplayHz();
+    if (!hz) hz = kGuestRefreshHz;
     uint64_t i = g_present_frame.fetch_add(1, std::memory_order_relaxed) + 1;
     auto period = HzPeriod(hz);
     auto target = g_frame_epoch + period * i;
     auto now = Clock::now();
-    // If we fell more than one frame behind (hitch), resync without catch-up bursts.
-    if (target < now - period) {
-        uint64_t catchup = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(now - g_frame_epoch).count() /
-                                    period.count()) +
-                           1;
-        g_present_frame.store(catchup, std::memory_order_relaxed);
-        target = g_frame_epoch + period * catchup;
+    // Late by a full period or more: skip whole periods (no catch-up burst of presents).
+    if (target + period < now) {
+        uint64_t behind = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(now - g_frame_epoch).count() /
+                                   std::max<int64_t>(period.count(), 1)) +
+                          1;
+        g_present_frame.store(behind, std::memory_order_relaxed);
+        target = g_frame_epoch + period * behind;
     }
     WaitUntil(target);
 }

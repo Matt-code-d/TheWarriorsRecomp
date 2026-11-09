@@ -39,7 +39,7 @@ public sealed class LauncherSettings
     /// <summary>Render scale percent of output height (25–200).</summary>
     public uint RenderPercent { get; set; } = 100;
 
-    /// <summary>off | fsr | dlss | xess — matches reference Warriors Xbox Recomp schema.</summary>
+    /// <summary>off | fsr | dlss | xess — settings.toml upscaler key.</summary>
     public string Upscaler { get; set; } = "off";
 
     /// <summary>native | ultra_quality | quality | balanced | performance | ultra_performance</summary>
@@ -70,6 +70,28 @@ public sealed class LauncherSettings
 
     /// <summary>d3d12 (only backend today) or vulkan (reserved — not built yet).</summary>
     public string GraphicsApi { get; set; } = "d3d12";
+
+    /// <summary>Present filmic grade (opt-in; off = baseline blit).</summary>
+    public bool Filmic { get; set; }
+
+    public uint FilmicStrength { get; set; } = 50;
+    public uint FilmicGrain { get; set; }
+    public uint FilmicVignette { get; set; } = 35;
+
+    /// <summary>Optional user .cube path relative to the exe; empty = built-in grade only.</summary>
+    public string FilmicLut { get; set; } = "";
+
+    /// <summary>Soft bloom from bright pixels (not SoftLight). Opt-in.</summary>
+    public bool SceneGlow { get; set; }
+
+    public uint SceneGlowStrength { get; set; } = 40;
+
+    /// <summary>linear (baseline) | hq</summary>
+    public string AudioResampler { get; set; } = "linear";
+
+    public bool PipelineCache { get; set; } = true;
+
+    public bool GpuSkinning { get; set; } = true;
 
     /// <summary>Legacy FSR1 index derived from Upscaler + UpscaleQuality (also written as <c>fsr</c>).</summary>
     public uint Fsr => DeriveFsr(Upscaler, UpscaleQuality);

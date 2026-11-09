@@ -1,6 +1,6 @@
 namespace WarriorsLauncher.Services;
 
-/// <summary>Detects vendor upscaler DLLs beside the game (layout from reference Warriors Xbox Recomp).</summary>
+/// <summary>Detects vendor upscaler DLLs beside the game exe.</summary>
 public static class UpscalerStatus
 {
     public static string Describe(string portRoot)

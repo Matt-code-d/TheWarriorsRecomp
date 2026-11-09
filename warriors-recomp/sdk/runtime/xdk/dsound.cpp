@@ -10,6 +10,7 @@
 #include <optional>
 #include <vector>
 
+#include "app/app.h"
 #include "audio/audio.h"
 #include "xbe/xbe.h"
 #include "xdk/hle.h"
@@ -200,6 +201,11 @@ struct Voice {
     int16_t decoded[2][65 * 8];
     // SilenceAll stamps this; Play after a stamp shows cutscene buffers resurrecting under gameplay.
     uint32_t silence_gen = 0;
+    // SetEG while looping: short soft release then stop (console envelopes not fully modelled).
+    uint32_t eg_release_left = 0;
+    // Last host touch (Play / vol / 3D / pos). Stale placed mixin loops get reaped — title often
+    // drops them without Buffer_Stop.
+    int64_t touch_ms = 0;
 
     bool mixin() const { return caps & kMixIn; }
 };
@@ -222,6 +228,12 @@ std::atomic<int> g_watch_play_logs{0};
 std::atomic<int> g_watch_pause_logs{0};
 std::atomic<int> g_watch_stop_logs{0};
 std::atomic<int> g_watch_data_logs{0};
+std::atomic<int> g_watch_vol_logs{0};
+std::atomic<int> g_watch_eg_logs{0};
+std::atomic<int> g_watch_pos_logs{0};
+std::atomic<int> g_watch_3d_logs{0};
+std::atomic<int> g_watch_mix_logs{0};
+std::atomic<int> g_watch_out_logs{0};
 bool SilenceActive() { return SilenceClock::now() < g_silence_until.load(std::memory_order_relaxed); }
 bool AudioWatchActive() {
     return SilenceClock::now() < g_audio_watch_until.load(std::memory_order_relaxed);
@@ -235,6 +247,23 @@ void ArmAudioWatch(std::chrono::milliseconds ms) {
     g_watch_pause_logs.store(0, std::memory_order_relaxed);
     g_watch_stop_logs.store(0, std::memory_order_relaxed);
     g_watch_data_logs.store(0, std::memory_order_relaxed);
+    g_watch_vol_logs.store(0, std::memory_order_relaxed);
+    g_watch_eg_logs.store(0, std::memory_order_relaxed);
+    g_watch_pos_logs.store(0, std::memory_order_relaxed);
+    g_watch_3d_logs.store(0, std::memory_order_relaxed);
+    g_watch_mix_logs.store(0, std::memory_order_relaxed);
+    g_watch_out_logs.store(0, std::memory_order_relaxed);
+}
+// Train/ambient watch: prefer logging voices that are currently looping+playing.
+bool WatchInteresting(const Voice& v) { return v.looping && v.playing && !v.stream; }
+bool WatchTake(std::atomic<int>& counter, int cap, const Voice& v) {
+    if (!AudioWatchActive()) return false;
+    // Always keep room for looping voices; non-loop traffic shares the same cap.
+    int n = counter.load(std::memory_order_relaxed);
+    if (n >= cap && !WatchInteresting(v)) return false;
+    if (n >= cap * 2) return false;  // hard ceiling even for loops
+    counter.fetch_add(1, std::memory_order_relaxed);
+    return true;
 }
 
 struct VoiceCensus {
@@ -361,6 +390,112 @@ float Sample(Voice& v, uint32_t data, uint32_t f, int c) {
     int16_t s;
     std::memcpy(&s, p + f * v.align + c * 2, 2);
     return s / 32768.0f;
+}
+
+bool AudioHqResampler() {
+    const std::string& r = app::Get().audio_resampler;
+    return r.size() >= 2 && (r[0] == 'h' || r[0] == 'H') && (r[1] == 'q' || r[1] == 'Q');
+}
+
+// Catmull-Rom / Hermite between xm1,x0,x1,x2 at t in [0,1] — opt-in HQ path (baseline stays linear).
+float Hermite(float xm1, float x0, float x1, float x2, float t) {
+    float c0 = x0;
+    float c1 = 0.5f * (x1 - xm1);
+    float c2 = xm1 - 2.5f * x0 + 2.0f * x1 - 0.5f * x2;
+    float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
+    return ((c3 * t + c2) * t + c1) * t + c0;
+}
+
+int64_t NowMs();  // defined near the mixer pump
+
+void TouchVoice(Voice& v) { v.touch_ms = NowMs(); }
+
+void TouchMixinFeeders(uint32_t mixin) {
+    if (!mixin) return;
+    int64_t t = NowMs();
+    for (auto& [obj, o] : g_voices) {
+        if (o.output == mixin) o.touch_ms = t;
+        (void)obj;
+    }
+}
+
+void StopFeedersOf(uint32_t mixin) {
+    if (!mixin) return;
+    for (auto& [obj, o] : g_voices) {
+        if (o.output != mixin || !o.playing) continue;
+        o.playing = false;
+        o.looping = false;
+        o.eg_release_left = 0;
+        LOGR("dsound: stop feeder obj=%08X (mixin %08X stopped)", obj, mixin);
+    }
+}
+
+void BeginSoftRelease(Voice& v, const char* why) {
+    if (!v.playing || v.stream) return;
+    if (v.eg_release_left) return;
+    v.eg_release_left = 12000;  // ~0.25 s @ 48 kHz
+    LOGR("dsound: soft-release obj=%08X bytes=%u out=%08X (%s)", v.obj, v.bytes, v.output, why);
+}
+
+bool BusIsPlaced(const Voice& bus) {
+    // "Placed" = rides world position / VoiceData (ambience, train, SFX). 2D music beds stay off this path.
+    return bus.is3d || bus.use_data || bus.has_direction;
+}
+
+void HardStopLoop(Voice& v, const char* why) {
+    if (!v.playing && !v.looping) return;
+    LOGR("dsound: hard-stop obj=%08X bytes=%u out=%08X (%s)", v.obj, v.bytes, v.output, why);
+    v.playing = false;
+    v.looping = false;
+    v.eg_release_left = 0;
+}
+
+// After XACT Stop: hard-kill every looping mixin feeder. 2D beds with no mix-in output stay
+// (mass-reaping those restarted music every frame). Soft-fade left small SFX looping.
+void WindDownPlacedLoopsLocked() {
+    int n = 0;
+    for (auto& [obj, v] : g_voices) {
+        if (!v.playing || !v.looping || v.stream || !v.output) continue;
+        HardStopLoop(v, "xact-stop mixin");
+        n++;
+        (void)obj;
+    }
+    if (n) LOGR("dsound: WindDownPlacedLoops stopped %d looping feeder(s)", n);
+}
+
+// Title often abandons placed ambients without Stop (source leaves, cue table cleared in guest
+// XACT we do not own). No host touch for a few seconds → retire the feeder.
+void ReapStaleMixinLoopsLocked() {
+    constexpr int64_t kStaleMs = 2800;
+    constexpr uint32_t kLargeBed = 120000;
+    const int64_t now = NowMs();
+    int n = 0;
+    for (auto& [obj, v] : g_voices) {
+        if (!v.playing || !v.looping || v.stream || !v.output) continue;
+        if (v.touch_ms == 0 || now - v.touch_ms < kStaleMs) continue;
+        auto it = g_voices.find(v.output);
+        const bool orphan = it == g_voices.end() || !it->second.mixin();
+        const bool placed = !orphan && (BusIsPlaced(it->second) || BusIsPlaced(v));
+        const bool large = v.bytes >= kLargeBed;
+        if (!orphan && !placed && !large) continue;
+        HardStopLoop(v, "stale mixin loop");
+        n++;
+        (void)obj;
+    }
+    if (n) LOGR("dsound: ReapStaleMixinLoops stopped %d", n);
+}
+
+void StopSiblingMixinLoopers(Voice& self) {
+    if (!self.output || !self.looping) return;
+    for (auto& [obj, o] : g_voices) {
+        if (obj == self.obj || o.stream) continue;
+        if (o.output == self.output && o.playing && o.looping) {
+            o.playing = false;
+            o.looping = false;
+            o.eg_release_left = 0;
+            LOGR("dsound: stop sibling loop obj=%08X (mixin %08X retaken by %08X)", obj, self.output, self.obj);
+        }
+    }
 }
 
 void Complete(Voice& v, Packet& pk, uint32_t status) {
@@ -717,7 +852,13 @@ std::optional<Cursor> BufferFrame(Voice& v) {
         v.pos = start + std::fmod(v.pos - start, double(end - start));
         f = uint32_t(v.pos);
     }
-    if (!v.data) return std::nullopt;
+    // No sample memory → treat as finished so XACT can reap the cue (sticky "playing" otherwise).
+    if (!v.data) {
+        v.playing = false;
+        v.looping = false;
+        v.pos = 0;
+        return std::nullopt;
+    }
     uint32_t base = v.data + v.play_start;
     Cursor at = {base, f, base, f};
     if (f + 1 < end) {
@@ -742,7 +883,28 @@ void MixVoice(Voice& v, float* bins, uint32_t frames, Voice* to) {
     Place at = Locate(v);
     Gains target = Levels(v, at);
     float itd = Itd(at.azimuth);
-    float send_to = to ? SendLevel(v) : 0.0f;
+    // XACT often parks distance/cone on the mix-in bus; feeders stay use3d=0. Inherit the
+    // mixin's VoiceData + 3D attenuation on the multipass send (distance often lives on the bus).
+    float send_to = 0.0f;
+    if (to) {
+        send_to = SendLevel(v) * VoiceDataScale(*to, kMultipass);
+        Place mout = Locate(*to);
+        if (mout.on) send_to *= mout.att;
+        if (!std::isfinite(send_to)) send_to = 0.0f;
+    }
+    if (v.eg_release_left) {
+        float fade = std::clamp(v.eg_release_left / 12000.f, 0.f, 1.f);
+        for (auto& row : target.bin)
+            for (float& g : row) g *= fade;
+        send_to *= fade;
+        if (v.eg_release_left > frames)
+            v.eg_release_left -= frames;
+        else {
+            v.eg_release_left = 0;
+            v.playing = false;
+            v.looping = false;
+        }
+    }
     if (!v.has_gain) {
         v.gain = target;
         v.itd = itd;
@@ -761,6 +923,7 @@ void MixVoice(Voice& v, float* bins, uint32_t frames, Voice* to) {
     }
     if (send) read |= (1u << channels) - 1;
     double rate = PlayRate(v, to);
+    const bool hq = AudioHqResampler() && !v.stream;
     v.block[v.last ^ 1] = -1;  // the title may have rewritten that block's memory since the last mix
     for (uint32_t i = 0; i < frames; i++) {
         float row[kRows] = {};
@@ -772,8 +935,16 @@ void MixVoice(Voice& v, float* bins, uint32_t frames, Voice* to) {
             float t = float(v.pos - cursor->f);
             for (uint32_t c = 0; c < channels; c++) {
                 if (!(read >> c & 1)) continue;
-                float x = Sample(v, cursor->data, cursor->f, int(c));
-                row[c] = x + (Sample(v, cursor->next_data, cursor->next_f, int(c)) - x) * t;
+                float x0 = Sample(v, cursor->data, cursor->f, int(c));
+                float x1 = Sample(v, cursor->next_data, cursor->next_f, int(c));
+                if (hq && v.tag != 0x69 && cursor->f > 0) {
+                    float xm1 = Sample(v, cursor->data, cursor->f - 1, int(c));
+                    // next+1 may sit past the region — fall back to x1 (still better than linear).
+                    float x2 = x1;
+                    row[c] = Hermite(xm1, x0, x1, x2, t);
+                } else {
+                    row[c] = x0 + (x1 - x0) * t;
+                }
             }
         }
         if (ears) {
@@ -822,12 +993,18 @@ void Render(float* out, uint32_t frames) {
     }
     size_t mixed = 0;
     float peak = 0;
+    // XACT routes player / ambience through mix-in targets that are often not marked
+    // "playing" themselves — only skip a missing mix-in object, never Audible()-gate it.
     for (auto& [obj, v] : g_voices) {
         if (v.mixin() || !Audible(v)) continue;
         Voice* to = nullptr;
         if (v.output) {
             auto it = g_voices.find(v.output);
-            if (it != g_voices.end() && it->second.mixin()) to = &it->second;
+            if (it != g_voices.end() && it->second.mixin()) {
+                to = &it->second;
+            } else if (v.looping && v.playing) {
+                HardStopLoop(v, "orphan-mixin");
+            }
         }
         MixVoice(v, bins.data(), frames, to);
         if (to) to->fed = true;
@@ -840,6 +1017,7 @@ void Render(float* out, uint32_t frames) {
         mixed++;
         (void)obj;
     }
+    ReapStaleMixinLoopsLocked();
     if (dsp::Loaded()) dsp::Run(bins.data(), frames);
     for (uint32_t i = 0; i < frames; i++) {
         const float* b = &bins[size_t(i) * kBins];
@@ -885,6 +1063,19 @@ void Render(float* out, uint32_t frames) {
                 LOGR("dsound: mix-buf[%d] obj=%08X bytes=%u vol=%.3f pos=%.0f loop=%d tagged=%u", i, top[i].obj,
                      top[i].bytes, top[i].vol, top[i].pos, top[i].looping ? 1 : 0, top[i].gen);
             }
+            // Train/ambient diagnosis: list every looping buffer still Audible (not just top-by-size).
+            int nloop = 0;
+            for (auto& [obj, v] : g_voices) {
+                if (v.stream || !v.looping || !Audible(v)) continue;
+                float vd = VoiceDataScale(v, kMultipass);
+                LOGR("dsound: mix-loop[%d] obj=%08X bytes=%u vol=%.3f mb=%d pos=%.0f play=%d pause=%d "
+                     "out=%08X is3d=%d mode=%u use3d=%d vd=%.3f p=(%.1f,%.1f,%.1f) min=%.1f max=%.1f",
+                     nloop++, obj, v.bytes, v.volume, v.volume_mb, v.pos, v.playing ? 1 : 0, v.paused ? 1 : 0,
+                     v.output, v.is3d ? 1 : 0, v.mode, v.use_data ? 1 : 0, vd, v.p[0], v.p[1], v.p[2], v.min_dist,
+                     v.max_dist);
+                if (nloop >= 12) break;
+            }
+            if (nloop == 0) LOGR("dsound: mix-loop none");
         }
     }
 }
@@ -974,11 +1165,16 @@ Voice* Find(uint32_t obj) {
 
 // SetOutputBuffer: a voice given a mix-in loses its own mix bins for the mix-in's multipass send.
 void ConnectOutput(Voice& v, uint32_t mixin) {
+    // XACT often tears a cue down by clearing the mix-in link; without Stop the loop would hang.
+    if (!mixin && v.output && v.playing && v.looping && !v.stream)
+        HardStopLoop(v, "SetOutputBuffer(0)");
     if (mixin && mixin != v.output) {
         v.nbins = 0;
         v.speakers = false;
     }
     v.output = mixin;
+    TouchVoice(v);
+    if (mixin) TouchMixinFeeders(mixin);
 }
 
 uint32_t NewBuffer(uint32_t desc, uint32_t out) {
@@ -1240,6 +1436,7 @@ HLE_STDCALL(IDirectSound_CreateSoundBuffer, 4) { return NewBuffer(a[1], a[2]); }
 
 BUFFER(Release, 1) {
     if (--v.refs > 0) return uint32_t(v.refs);
+    if (v.mixin()) StopFeedersOf(v.obj);
     if (v.owned) mem::FreeContiguous(v.owned);
     uint32_t obj = v.obj;
     g_voices.erase(obj);
@@ -1273,8 +1470,12 @@ BUFFER(Play, 4) {
     v.has_gain = false;  // a new sound does not ramp from the last one's levels
     v.playing = true;
     v.looping = a[3] & 1;
+    v.eg_release_left = 0;
     if (a[3] & 2) v.pos = 0;
     v.sync = a[3] & 4;
+    TouchVoice(v);
+    if (v.output) TouchMixinFeeders(v.output);
+    if (v.looping) StopSiblingMixinLoopers(v);
     if (AudioWatchActive()) {
         uint32_t gen = g_silence_gen.load(std::memory_order_relaxed);
         int n = g_watch_play_logs.fetch_add(1, std::memory_order_relaxed);
@@ -1285,38 +1486,62 @@ BUFFER(Play, 4) {
     }
     return 0;
 }
+
 BUFFER(Stop, 1) {
-    if (AudioWatchActive()) {
-        int n = g_watch_stop_logs.fetch_add(1, std::memory_order_relaxed);
-        if (n < 40) LOGR("dsound: Stop obj=%08X was_play=%d pos=%.0f (watch #%d)", v.obj, v.playing ? 1 : 0, v.pos, n);
+    if (WatchTake(g_watch_stop_logs, 120, v) || (AudioWatchActive() && WatchInteresting(v))) {
+        int n = g_watch_stop_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: Stop obj=%08X was_play=%d loop=%d pos=%.0f (watch #%d)", v.obj, v.playing ? 1 : 0,
+             v.looping ? 1 : 0, v.pos, n);
     }
     v.playing = false;
+    v.looping = false;
+    v.eg_release_left = 0;
+    if (v.mixin()) StopFeedersOf(v.obj);
     return 0;
 }
 // (this, time low, time high, flags): stops now, the release envelope is not reproduced
 BUFFER(StopEx, 4) {
-    if (AudioWatchActive()) {
-        int n = g_watch_stop_logs.fetch_add(1, std::memory_order_relaxed);
-        if (n < 40)
-            LOGR("dsound: StopEx obj=%08X was_play=%d pos=%.0f (watch #%d)", v.obj, v.playing ? 1 : 0, v.pos, n);
+    if (WatchTake(g_watch_stop_logs, 120, v) || (AudioWatchActive() && WatchInteresting(v))) {
+        int n = g_watch_stop_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: StopEx obj=%08X was_play=%d loop=%d pos=%.0f (watch #%d)", v.obj, v.playing ? 1 : 0,
+             v.looping ? 1 : 0, v.pos, n);
     }
     v.playing = false;
+    v.looping = false;
+    v.eg_release_left = 0;
+    if (v.mixin()) StopFeedersOf(v.obj);
     return 0;
 }
 // (this, flags): 0 resumes, 1 pauses, 2 holds until IDirectSound_SynchPlayback
 BUFFER(Pause, 2) {
-    if (AudioWatchActive()) {
-        int n = g_watch_pause_logs.fetch_add(1, std::memory_order_relaxed);
-        if (n < 80)
-            LOGR("dsound: Pause obj=%08X flags=%u play=%d pos=%.0f tagged=%u (watch #%d)", v.obj, a[1],
-                 v.playing ? 1 : 0, v.pos, v.silence_gen, n);
+    if (WatchTake(g_watch_pause_logs, 120, v) || (AudioWatchActive() && WatchInteresting(v))) {
+        int n = g_watch_pause_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: Pause obj=%08X flags=%u play=%d loop=%d pos=%.0f tagged=%u (watch #%d)", v.obj, a[1],
+             v.playing ? 1 : 0, v.looping ? 1 : 0, v.pos, v.silence_gen, n);
     }
     v.paused = a[1] == 1;
     v.sync = a[1] == 2;
+    // XACT PAUSENOACTIVATE on a looping mixin feeder — treat as stop so the bed cannot resume alone.
+    if (a[1] == 1 && v.playing && v.looping && !v.stream && v.output) {
+        v.playing = false;
+        v.looping = false;
+        v.eg_release_left = 0;
+        v.paused = false;
+        LOGR("dsound: Pause→stop looping feeder obj=%08X out=%08X", v.obj, v.output);
+    }
     return 0;
 }
-// envelopes are not played
-BUFFER(SetEG, 2) { return 0; }
+// Full EG curves are not modelled; a SetEG on an active loop starts a short soft stop (XACT release).
+BUFFER(SetEG, 2) {
+    if (v.playing && v.looping && !v.stream) {
+        HardStopLoop(v, "SetEG");
+    } else if (WatchTake(g_watch_eg_logs, 80, v) || (AudioWatchActive() && WatchInteresting(v))) {
+        int n = g_watch_eg_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: SetEG obj=%08X eg=%08X play=%d loop=%d vol=%.3f (watch #%d)", v.obj, a[1],
+             v.playing ? 1 : 0, v.looping ? 1 : 0, v.volume, n);
+    }
+    return 0;
+}
 // (this, start, length) in bytes, 0 length plays to the end. The loop becomes the whole region.
 BUFFER(SetPlayRegion, 3) {
     if (a[1] > v.bytes || a[2] > v.bytes - a[1]) return 0x88780032u;  // DSERR_INVALIDCALL
@@ -1360,8 +1585,20 @@ BUFFER(Lock, 8) {
     return 0;
 }
 BUFFER(SetVolume, 2) {
+    int32_t prev_mb = v.volume_mb;
     v.volume_mb = int32_t(a[1]);
     v.volume = Db(v.volume_mb);
+    TouchVoice(v);
+    if (v.mixin()) TouchMixinFeeders(v.obj);
+    // Title often mutes a looping feeder instead of Stop — treat floor silence as a release.
+    if (v.playing && v.looping && !v.stream && v.volume_mb <= -10000 && prev_mb > -10000)
+        HardStopLoop(v, "SetVolume mute");
+
+    if (WatchTake(g_watch_vol_logs, 120, v) || (AudioWatchActive() && WatchInteresting(v) && prev_mb != v.volume_mb)) {
+        int n = g_watch_vol_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: SetVolume obj=%08X mb=%d->%d vol=%.3f play=%d loop=%d (watch #%d)", v.obj, prev_mb,
+             v.volume_mb, v.volume, v.playing ? 1 : 0, v.looping ? 1 : 0, n);
+    }
     return 0;
 }
 BUFFER(SetFrequency, 2) {
@@ -1375,22 +1612,50 @@ BUFFER(SetHeadroom, 2) {
 }
 BUFFER(SetMixBinVolumes, 2) {
     SetBinVolumes(v, a[1]);
+    if (WatchTake(g_watch_mix_logs, 80, v) || (AudioWatchActive() && WatchInteresting(v))) {
+        int n = g_watch_mix_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: SetMixBinVolumes obj=%08X bins=%08X play=%d loop=%d vol=%.3f (watch #%d)", v.obj, a[1],
+             v.playing ? 1 : 0, v.looping ? 1 : 0, v.volume, n);
+    }
     return 0;
 }
 BUFFER(SetMixBins, 2) {
     SetBins(v, a[1]);
+    if (WatchTake(g_watch_mix_logs, 80, v) || (AudioWatchActive() && WatchInteresting(v))) {
+        int n = g_watch_mix_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: SetMixBins obj=%08X bins=%08X play=%d loop=%d (watch #%d)", v.obj, a[1], v.playing ? 1 : 0,
+             v.looping ? 1 : 0, n);
+    }
     return 0;
 }
 BUFFER(SetMaxDistance, 3) {
     v.max_dist = F32(a[1]);
+    if (WatchTake(g_watch_pos_logs, 80, v) || (AudioWatchActive() && WatchInteresting(v))) {
+        int n = g_watch_pos_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: SetMaxDistance obj=%08X max=%.1f play=%d loop=%d (watch #%d)", v.obj, v.max_dist,
+             v.playing ? 1 : 0, v.looping ? 1 : 0, n);
+    }
     return 0;
 }
 BUFFER(SetMinDistance, 3) {
     v.min_dist = F32(a[1]);
+    if (WatchTake(g_watch_pos_logs, 80, v) || (AudioWatchActive() && WatchInteresting(v))) {
+        int n = g_watch_pos_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: SetMinDistance obj=%08X min=%.1f play=%d loop=%d (watch #%d)", v.obj, v.min_dist,
+             v.playing ? 1 : 0, v.looping ? 1 : 0, n);
+    }
     return 0;
 }
 BUFFER(SetPosition, 5) {
     for (int i = 0; i < 3; i++) v.p[i] = F32(a[1 + i]);
+    v.is3d = true;
+    TouchVoice(v);
+    if (v.mixin()) TouchMixinFeeders(v.obj);
+    if (WatchTake(g_watch_pos_logs, 120, v) || (AudioWatchActive() && WatchInteresting(v))) {
+        int n = g_watch_pos_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: SetPosition obj=%08X p=(%.1f,%.1f,%.1f) play=%d loop=%d vol=%.3f (watch #%d)", v.obj, v.p[0],
+             v.p[1], v.p[2], v.playing ? 1 : 0, v.looping ? 1 : 0, v.volume, n);
+    }
     return 0;
 }
 BUFFER(SetVelocity, 5) { return 0; }
@@ -1401,6 +1666,15 @@ BUFFER(SetAllParameters, 3) {
     v.min_dist = F32(R32(a[1] + 0x34));
     v.max_dist = F32(R32(a[1] + 0x38));
     v.mode = R32(a[1] + 0x3C);
+    v.is3d = true;
+    TouchVoice(v);
+    if (v.mixin()) TouchMixinFeeders(v.obj);
+    if (WatchTake(g_watch_pos_logs, 120, v) || (AudioWatchActive() && WatchInteresting(v))) {
+        int n = g_watch_pos_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: SetAllParameters obj=%08X p=(%.1f,%.1f,%.1f) min=%.1f max=%.1f mode=%u play=%d loop=%d "
+             "(watch #%d)",
+             v.obj, v.p[0], v.p[1], v.p[2], v.min_dist, v.max_dist, v.mode, v.playing ? 1 : 0, v.looping ? 1 : 0, n);
+    }
     return 0;
 }
 // (this, points, count, apply)
@@ -1411,6 +1685,11 @@ BUFFER(SetRolloffCurve, 4) {
 }
 BUFFER(SetOutputBuffer, 2) {
     ConnectOutput(v, a[1]);
+    if (WatchTake(g_watch_out_logs, 80, v) || (AudioWatchActive() && WatchInteresting(v))) {
+        int n = g_watch_out_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: SetOutputBuffer obj=%08X out=%08X play=%d loop=%d (watch #%d)", v.obj, a[1],
+             v.playing ? 1 : 0, v.looping ? 1 : 0, n);
+    }
     return 0;
 }
 BUFFER(SetFormat, 2) {
@@ -1630,6 +1909,8 @@ void DirectSoundSilenceAll() {
         if (live || v.playing) stopped++;
         if (v.data && v.bytes) with_data++;
         v.playing = false;
+        v.looping = false;
+        v.eg_release_left = 0;
         v.paused = false;
         v.sync = false;
         v.pos = 0;
@@ -1645,9 +1926,31 @@ void DirectSoundSilenceAll() {
     LogCensus("SilenceAll-after", gen);
 }
 
+void DirectSoundArmAudioWatch(uint32_t ms) {
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    if (ms < 1000) ms = 1000;
+    if (ms > 300000) ms = 300000;
+    ArmAudioWatch(std::chrono::milliseconds(ms));
+    uint32_t gen = g_silence_gen.load(std::memory_order_relaxed);
+    LOGR("dsound: AudioWatch armed %ums (Play/Stop/Pause/Vol/EG/Pos/3D/Mix + mix-loop)", ms);
+    LogCensus("AudioWatch-arm", gen);
+}
+
+void DirectSoundWindDownPlacedLoops() {
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    WindDownPlacedLoopsLocked();
+}
+
 void DirectSoundSetOutputBuffer(uint32_t voice, uint32_t mixin) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
-    if (Voice* v = Find(voice)) ConnectOutput(*v, mixin);
+    Voice* v = Find(voice);
+    if (!v) return;
+    ConnectOutput(*v, mixin);
+    if (WatchTake(g_watch_out_logs, 80, *v) || (AudioWatchActive() && WatchInteresting(*v))) {
+        int n = g_watch_out_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: SetOutputBuffer(host) obj=%08X out=%08X play=%d loop=%d (watch #%d)", v->obj, mixin,
+             v->playing ? 1 : 0, v->looping ? 1 : 0, n);
+    }
 }
 
 void DirectSoundSet3DVoiceData(uint32_t voice, uint32_t data) {
@@ -1665,11 +1968,30 @@ void DirectSoundSet3DVoiceData(uint32_t voice, uint32_t data) {
         for (uint32_t k = 0; k < f.count; k++) v->voice_data[f.first + k] = int32_t(R32(data + (f.first + k) * 4));
     }
     if (flags & kDirectionFlag) v->has_direction = true;
+    TouchVoice(*v);
+    if (v->mixin()) TouchMixinFeeders(v->obj);
+    if (WatchTake(g_watch_3d_logs, 120, *v) || (AudioWatchActive() && WatchInteresting(*v))) {
+        int n = g_watch_3d_logs.load(std::memory_order_relaxed);
+        float vd = VoiceDataScale(*v, kMultipass);
+        LOGR("dsound: Set3DVoiceData obj=%08X flags=%02X dist=%d cone=%d use=%d vd=%.3f play=%d loop=%d vol=%.3f "
+             "(watch #%d)",
+             v->obj, flags, v->voice_data[kVdDistance], v->voice_data[kVdCone], v->use_data ? 1 : 0, vd,
+             v->playing ? 1 : 0, v->looping ? 1 : 0, v->volume, n);
+    }
 }
 
 void DirectSoundUse3DVoiceData(uint32_t voice, bool use) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
-    if (Voice* v = Find(voice)) v->use_data = use;
+    Voice* v = Find(voice);
+    if (!v) return;
+    v->use_data = use;
+    TouchVoice(*v);
+    if (v->mixin()) TouchMixinFeeders(v->obj);
+    if (WatchTake(g_watch_3d_logs, 120, *v) || (AudioWatchActive() && WatchInteresting(*v))) {
+        int n = g_watch_3d_logs.load(std::memory_order_relaxed);
+        LOGR("dsound: Use3DVoiceData obj=%08X use=%d play=%d loop=%d vol=%.3f (watch #%d)", v->obj, use ? 1 : 0,
+             v->playing ? 1 : 0, v->looping ? 1 : 0, v->volume, n);
+    }
 }
 
 void DirectSoundSetPitch(uint32_t voice, int32_t pitch) {
@@ -1695,4 +2017,5 @@ void DirectSoundGetVoiceProperties(uint32_t voice, uint32_t props) {
     W32(props + 0x44, uint32_t(int32_t(std::lround(4096.0 * std::log2(std::max(hz, 1.0) / 48000.0)))));
     W32(props + 0x48, uint32_t(v->volume_mb));
 }
+
 }  // namespace xdk

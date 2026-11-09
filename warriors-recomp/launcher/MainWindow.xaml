@@ -218,6 +218,62 @@
                 <Slider x:Name="SldSharpness" Minimum="0" Maximum="100" Value="20" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="Sharpness_Changed"/>
               </DockPanel>
             </Grid>
+
+            <TextBlock Text="LOOK &amp; AUDIO" Style="{StaticResource FieldLabel}" Margin="0,12,0,0"/>
+            <CheckBox x:Name="ChkFilmic" Content="Filmic look (opt-in)" Margin="0,4,0,0" Checked="Settings_Changed" Unchecked="Settings_Changed"/>
+            <Grid Margin="0,4,0,5">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="160"/><ColumnDefinition Width="320"/><ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource FieldLabel}" Text="Filmic strength" VerticalAlignment="Center"/>
+              <DockPanel Grid.Column="1">
+                <TextBlock x:Name="TxtFilmicStrVal" DockPanel.Dock="Right" Width="36" Text="50" VerticalAlignment="Center" Foreground="{StaticResource Mute}"/>
+                <Slider x:Name="SldFilmicStrength" Minimum="0" Maximum="100" Value="50" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="FilmicSlider_Changed"/>
+              </DockPanel>
+            </Grid>
+            <Grid Margin="0,0,0,5">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="160"/><ColumnDefinition Width="320"/><ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource FieldLabel}" Text="Vignette" VerticalAlignment="Center"/>
+              <DockPanel Grid.Column="1">
+                <TextBlock x:Name="TxtFilmicVigVal" DockPanel.Dock="Right" Width="36" Text="35" VerticalAlignment="Center" Foreground="{StaticResource Mute}"/>
+                <Slider x:Name="SldFilmicVignette" Minimum="0" Maximum="100" Value="35" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="FilmicSlider_Changed"/>
+              </DockPanel>
+            </Grid>
+            <Grid Margin="0,0,0,5">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="160"/><ColumnDefinition Width="320"/><ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource FieldLabel}" Text="Grain" VerticalAlignment="Center"/>
+              <DockPanel Grid.Column="1">
+                <TextBlock x:Name="TxtFilmicGrainVal" DockPanel.Dock="Right" Width="36" Text="0" VerticalAlignment="Center" Foreground="{StaticResource Mute}"/>
+                <Slider x:Name="SldFilmicGrain" Minimum="0" Maximum="100" Value="0" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="FilmicSlider_Changed"/>
+              </DockPanel>
+            </Grid>
+            <CheckBox x:Name="ChkSceneGlow" Content="Scene glow (bright bloom, opt-in)" Margin="0,4,0,0" Checked="Settings_Changed" Unchecked="Settings_Changed"/>
+            <Grid Margin="0,4,0,5">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="160"/><ColumnDefinition Width="320"/><ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource FieldLabel}" Text="Glow strength" VerticalAlignment="Center"/>
+              <DockPanel Grid.Column="1">
+                <TextBlock x:Name="TxtGlowVal" DockPanel.Dock="Right" Width="36" Text="40" VerticalAlignment="Center" Foreground="{StaticResource Mute}"/>
+                <Slider x:Name="SldSceneGlow" Minimum="0" Maximum="100" Value="40" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="FilmicSlider_Changed"/>
+              </DockPanel>
+            </Grid>
+            <Grid Margin="0,0,0,5">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="160"/><ColumnDefinition Width="320"/><ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource FieldLabel}" Text="Audio resampler" VerticalAlignment="Center"/>
+              <ComboBox x:Name="CmbAudioResampler" Grid.Column="1" DisplayMemberPath="Label" SelectionChanged="Settings_Changed"/>
+              <TextBlock Grid.Column="2" Margin="16,0,0,0" VerticalAlignment="Center" Foreground="{StaticResource Mute}" FontSize="12" TextWrapping="Wrap"
+                         Text="linear = baseline. hq = Hermite (cleaner highs)."/>
+            </Grid>
+            <CheckBox x:Name="ChkPipelineCache" Content="Shader pipeline cache" Margin="0,4,0,0" IsChecked="True" Checked="Settings_Changed" Unchecked="Settings_Changed"/>
+            <CheckBox x:Name="ChkGpuSkinning" Content="GPU vertex programs (already on)" Margin="0,4,0,0" IsChecked="True" Checked="Settings_Changed" Unchecked="Settings_Changed"/>
+
             <CheckBox x:Name="ChkCustomTex" Content="Custom textures" Margin="0,8,0,0" Checked="Settings_Changed" Unchecked="Settings_Changed"/>
             <TextBlock x:Name="TxtRenderHint" Margin="0,12,0,0" Foreground="{StaticResource Mute}" TextWrapping="Wrap"/>
           </StackPanel>

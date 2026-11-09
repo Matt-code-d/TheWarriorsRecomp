@@ -8,6 +8,13 @@ namespace xdk {
 // DirectSound stream cannot keep mixing under the next scene.
 void DirectSoundSilenceAll();
 
+// After XACT SoundBank/SoundSource Stop: soft-fade looping feeders that ride a placed
+// (3D / VoiceData) mix-in. Leaves 2D beds alone so music is not chopped and restarted.
+void DirectSoundWindDownPlacedLoops();
+
+// F8 / diag: log Play/Stop/Pause + mixer snapshots (incl. all looping buffers) for `ms`.
+void DirectSoundArmAudioWatch(uint32_t ms);
+
 // XACT routes every 3D SFX through DSBCAPS_MIXIN submixes + Set3DVoiceData.
 // Stubs that ignore these leave music (2D) working and all effect cues silent.
 void DirectSoundSetOutputBuffer(uint32_t voice, uint32_t mixin);
